@@ -1,4 +1,4 @@
-//#define SPALL_ENABLED
+#define SPALL_ENABLED
 #define COBJMACROS
 
 int _fltused;
@@ -74,16 +74,22 @@ i32                         mouse_x, mouse_y;
 char                        buf[64]; // for sprintf, dumb
 u64                         frame_start;
 
+typedef struct
+{
+    u32 position;
+    u32 column;
+    u32 line;
+    u32 wish_column;
+    
+} caret;
+
+u64 caret_last_move_time;
+
 // view
 u32                         cell_buffer_count;
 f32                         view_offset_pixels;
-u32                         caret_position;
-u32                         caret_column;
-u32                         caret_line;
-u32                         caret_wish_column;
-u64                         caret_last_move_time;
-f32                         caret_screen_x;
-f32                         caret_screen_y;
+caret                       carets[1024];
+u32                         num_carets = 1;
 
 // buffer
 arena   *text_arena;
@@ -425,17 +431,36 @@ LRESULT window_callback(HWND window,
     LRESULT result = 0;
     switch (message)
     {
+        case WM_SYSKEYDOWN:
+        case WM_SYSKEYUP:
         case WM_KEYUP:
         case WM_KEYDOWN:
         {
             b32 was_down = (lParam & (1 << 30));
             b32 is_down  = !(lParam & (1 << 31));
 
+            u16 code = (u8)wParam;
+            
+            if(GetKeyState(VK_SHIFT) & 0x8000)
+            {
+                code |= MODIFIER_SHIFT;
+            }
+
+            if(GetKeyState(VK_CONTROL) & 0x8000)
+            {
+                code |= MODIFIER_CTRL;
+            }
+
+            if(GetKeyState(VK_MENU) & 0x8000)
+            {
+                code |= MODIFIER_ALT;
+            }
+            
             input_queue[input_queue_count] = (input_event)
             {
                 .type = INPUT_EVENT_KEY,
+                .code = code,
                 .is_repeat = was_down && is_down,
-                .vk_code = wParam,
                 .is_down = is_down
             };
             input_queue_count++;
@@ -554,32 +579,32 @@ void busy_wait(u64 time_us)
     while(get_time_us() < a) { }
 }
 
-u32 caret_get_column()
+u32 caret_get_column(caret *caret)
 {
-    for(u32 i = caret_position; i >= 0; i--)
+    for(u32 i = caret->position; i >= 0; i--)
     {
         if(i == 0)
         {
-            return caret_position - i;
+            return caret->position - i;
         }
         if(text[i] == '\n')
         {
-            return caret_position - i - 1;
+            return caret->position - i - 1;
         }
     }
     return 0;
 }
 
-void caret_move_right()
+void caret_move_right(caret *caret)
 {
-    u32 p = caret_position;
-    while(caret_position != text_size)
+    u32 p = caret->position;
+    while(caret->position != text_size)
     {
-        char c = text[caret_position];
-        caret_position++;
+        char c = text[caret->position];
+        caret->position++;
         if(c == '\n')
         {
-            caret_line++;
+            caret->line++;
             break;
         }
         if(c > 31)
@@ -588,19 +613,19 @@ void caret_move_right()
         }
     }
     caret_last_move_time = frame_start;
-    caret_column = caret_get_column();
-    caret_wish_column = caret_column;
+    caret->column = caret_get_column(caret);
+    caret->wish_column = caret->column;
 }
 
-void caret_move_left()
+void caret_move_left(caret *caret)
 {
-    while(caret_position)
+    while(caret->position)
     {
-        caret_position--;
-        char c = text[caret_position];
+        caret->position--;
+        char c = text[caret->position];
         if(c == '\r')
         {
-            caret_line--;
+            caret->line--;
             break;
         }
         if(c > 31)
@@ -609,84 +634,84 @@ void caret_move_left()
         }
     }
     caret_last_move_time = frame_start;
-    caret_column = caret_get_column();
-    caret_wish_column = caret_column;
+    caret->column = caret_get_column(caret);
+    caret->wish_column = caret->column;
 }
 
-void caret_move_to_prev_line()
+void caret_move_to_prev_line(caret *caret)
 {
-    while(caret_position)
+    while(caret->position)
     {
-        if(text[caret_position] == '\n')
+        if(text[caret->position] == '\n')
         {
-            caret_position--;
-            caret_line--;
+            caret->position--;
+            caret->line--;
             break;
         }
-        caret_position--;
+        caret->position--;
     }
 }
 
-void caret_move_to_line_start()
+void caret_move_to_line_start(caret *caret)
 {
     while(1)
     {
-        if(caret_position == 0 || text[caret_position - 1] == '\n')
+        if(caret->position == 0 || text[caret->position - 1] == '\n')
         {
             break;
         }
-        caret_position--;
+        caret->position--;
     }
 }
 
-void caret_go_to_column(u32 col)
+void caret_go_to_column(caret *caret, u32 col)
 {
-    caret_move_to_line_start();
+    caret_move_to_line_start(caret);
     u32 c = 0;
-    while(c != col && caret_position != text_size)
+    while(c != col && caret->position != text_size)
     {
-        if(text[caret_position] == '\r')
+        if(text[caret->position] == '\r')
         {
             break;
         }
-        caret_position++;
+        caret->position++;
         c++;
     }
 }
 
-void caret_move_to_next_line()
+void caret_move_to_next_line(caret *caret)
 {
-    while(caret_position != text_size)
+    while(caret->position != text_size)
     {
-        if(text[caret_position] == '\n')
+        if(text[caret->position] == '\n')
         {
-            caret_position++;
-            caret_line++;
+            caret->position++;
+            caret->line++;
             break;
         }
-        caret_position++;
+        caret->position++;
     }
 }
 
-void caret_move_up()
+void caret_move_up(caret *caret)
 {
-    caret_move_to_prev_line();
-    caret_go_to_column(caret_wish_column);
-    caret_column = caret_get_column();
+    caret_move_to_prev_line(caret);
+    caret_go_to_column(caret, caret->wish_column);
+    caret->column = caret_get_column(caret);
     caret_last_move_time = frame_start;
 }
 
-void caret_move_down()
+void caret_move_down(caret *caret)
 {
-    caret_move_to_next_line();
-    caret_go_to_column(caret_wish_column);
-    caret_column = caret_get_column();
+    caret_move_to_next_line(caret);
+    caret_go_to_column(caret, caret->wish_column);
+    caret->column = caret_get_column(caret);
     caret_last_move_time = frame_start;
 }
 
-void caret_insert_characters(char *c, u32 count)
+void caret_insert_characters(caret *caret, char *c, u32 count)
 {    
-    u32 p = caret_position;
+    u32 p = caret->position;
     for(u32 i = text_size + count - 1; i >= p + count; i--)
     {
         text[i] = text[i - count];
@@ -698,13 +723,43 @@ void caret_insert_characters(char *c, u32 count)
     text_size += count;
 }
 
-void caret_remove_characters_to_the_right(u32 count)
+void caret_remove_characters_to_the_right(caret *caret, u32 count)
 {
-    for(u32 i = caret_position; i < text_size; i++)
+    for(u32 i = caret->position; i < text_size; i++)
     {
         text[i] = text[i + count];
     }
     text_size -= count;
+}
+
+void caret_spawn_new_below()
+{
+    caret bottom_caret = carets[0];
+    for(u32 i = 0; i < num_carets; i++)
+    {
+        if(carets[i].line > bottom_caret.line)
+        {
+            bottom_caret = carets[i];
+        }
+    }
+    carets[num_carets] = bottom_caret;
+    caret_move_down(&carets[num_carets]);
+    num_carets++;
+}
+
+void caret_spawn_new_above()
+{
+    caret top_caret = carets[0];
+    for(u32 i = 0; i < num_carets; i++)
+    {
+        if(carets[i].line < top_caret.line)
+        {
+            top_caret = carets[i];
+        }
+    }
+    carets[num_carets] = top_caret;
+    caret_move_up(&carets[num_carets]);
+    num_carets++;
 }
 
 void __stdcall WinMainCRTStartup()
@@ -977,6 +1032,13 @@ void __stdcall WinMainCRTStartup()
         mouse_wheel_delta = (f32) mouse_wheel_delta_accum / 120.0f * 32.0f;
         view_offset_pixels -= mouse_wheel_delta;
 
+        if(screen_w != new_screen_w || screen_h != new_screen_h)
+        {
+            screen_w = new_screen_w;
+            screen_h = new_screen_h;
+            resize_swapchain();
+        }
+
         for(u32 i = 0; i < input_queue_count; i++)
         {
             input_event e = input_queue[i];
@@ -987,68 +1049,77 @@ void __stdcall WinMainCRTStartup()
                 {
                     if(!e.is_repeat)
                     {
-                        if(e.vk_code == VK_F11)
+                        if(e.code == VK_F11)
                         {
                             toggle_fullscreen();
                         }
                     }
-
-                    if(e.vk_code == VK_RIGHT)
+                    if(e.code == (VK_DOWN | MODIFIER_ALT | MODIFIER_CTRL))
                     {
-                        caret_move_right();
+                        caret_spawn_new_below();
                     }
-                    else if(e.vk_code == VK_LEFT)
+                    if(e.code == (VK_UP | MODIFIER_ALT | MODIFIER_CTRL))
                     {
-                        caret_move_left();
-                    }
-                    else if(e.vk_code == VK_DOWN)
-                    {
-                        caret_move_down();
-                    }
-                    else if(e.vk_code == VK_UP)
-                    {
-                        caret_move_up();
+                        caret_spawn_new_below();
                     }
                 }
             }
 
-            if(e.type == INPUT_EVENT_TEXT)
+            for(u32 i = 0; i < num_carets; i++)
             {
-                if(e.character > 31)
+                caret *caret = &carets[i];
+                if(e.is_down)
                 {
-                    caret_insert_characters(&e.character, 1);
-                    caret_move_right();
-                }
-                else if(e.character == '\r')
-                {
-                    char line_end[2] = { '\r', '\n' };
-                    caret_insert_characters(line_end, 2);
-                    caret_move_right();
-                }
-                else if(e.character == '\b' && caret_position > 0)
-                {
-                    if(caret_position > 1 && text[caret_position - 1] == '\n')
+                    if(e.type == INPUT_EVENT_KEY)
                     {
-                        caret_move_left();
-                        caret_remove_characters_to_the_right(2);
+                        if(e.code == VK_RIGHT)
+                        {
+                            caret_move_right(caret);
+                        }
+                        else if(e.code == VK_LEFT)
+                        {
+                            caret_move_left(caret);
+                        }
+                        else if(e.code == VK_DOWN)
+                        {
+                            caret_move_down(caret);
+                        }
+                        else if(e.code == VK_UP)
+                        {
+                            caret_move_up(caret);
+                        }
                     }
-                    else
+                }
+    
+                if(e.type == INPUT_EVENT_TEXT)
+                {
+                    if(e.character > 31)
                     {
-                        caret_move_left();
-                        caret_remove_characters_to_the_right(1);
+                        caret_insert_characters(caret,&e.character, 1);
+                        caret_move_right(caret);
+                    }
+                    else if(e.character == '\r')
+                    {
+                        char line_end[2] = { '\r', '\n' };
+                        caret_insert_characters(caret, line_end, 2);
+                        caret_move_right(caret);
+                    }
+                    else if(e.character == '\b' && caret->position > 0)
+                    {
+                        if(caret->position > 1 && text[caret->position - 1] == '\n')
+                        {
+                            caret_move_left(caret);
+                            caret_remove_characters_to_the_right(caret, 2);
+                        }
+                        else
+                        {
+                            caret_move_left(caret);
+                            caret_remove_characters_to_the_right(caret, 1);
+                        }
                     }
                 }
             }
-        }
 
-        ////////////////////////////////////////////////////////////////////////////////
-        ////////////////////////////////////////////////////////////////////////////////
-
-        if(screen_w != new_screen_w || screen_h != new_screen_h)
-        {
-            screen_w = new_screen_w;
-            screen_h = new_screen_h;
-            resize_swapchain();
         }
 
         ////////////////////////////////////////////////////////////////////////////////
@@ -1155,7 +1226,7 @@ void __stdcall WinMainCRTStartup()
                         .line_in_text = topmost_visible_line + line,
                         .chop_offset = line_start_column,
                         .pos_in_text = line_start,
-                        .length = column,
+                        .length = text_position - line_start,
                     };
                     line_start = text_position;
                     line_start_column = column;
@@ -1196,20 +1267,31 @@ void __stdcall WinMainCRTStartup()
                 };
             }
 
-            if(l->line_in_text == caret_line)
+            for(u32 k = 0; k < num_carets; k++)
             {
-                for(u32 j = 0; j < width; j++)
+                caret *caret = &carets[k];
+                if(l->line_in_text == caret->line)
                 {
-                    cells[i * width + j].bg_color = 0x001F1F1F;
-                }
-                
-                if(!caret_blink)
-                {
-                    if(caret_column >= l->chop_offset)
+                    for(u32 j = 0; j < width; j++)
                     {
-                        cell *c = &cells[caret_column - l->chop_offset + i * width];
-                        c->bg_color = ~c->bg_color;
-                        c->text_color = ~c->text_color;
+                        cells[i * width + j].bg_color = 0x001F1F1F;
+                    }
+                }
+            }
+
+            for(u32 k = 0; k < num_carets; k++)
+            {
+                caret *caret = &carets[k];
+                if(l->line_in_text == caret->line)
+                {                    
+                    if(!caret_blink)
+                    {
+                        if(caret->column >= l->chop_offset)
+                        {
+                            cell *c = &cells[caret->column - l->chop_offset + i * width];
+                            c->bg_color = ~c->bg_color;
+                            c->text_color = ~c->text_color;
+                        }
                     }
                 }
             }
@@ -1231,10 +1313,12 @@ void __stdcall WinMainCRTStartup()
             .pointer_y = mouse_y
         };
 
+        PROFILE_BEGIN("draw");
         d3d11_write_buffer((ID3D11Resource*)cell_buffer, cells, cell_count * sizeof(cell));
         d3d11_write_buffer((ID3D11Resource*)d3d11_cbuffer, &cb, sizeof(cbuffer_t));
 
         ID3D11DeviceContext_Dispatch(device_context, (screen_w + 8 - 1) / 8, (screen_h + 8 - 1) / 8, 1);
+        PROFILE_END();
 
         ////////////////////////////////////////////////////////////////////////////////
         ////////////////////////////////////////////////////////////////////////////////

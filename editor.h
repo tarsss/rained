@@ -40,6 +40,14 @@ typedef enum INPUT_EVENT
 
 } INPUT_EVENT;
 
+typedef enum KEY_MODIFIER
+{
+    MODIFIER_SHIFT = 256,
+    MODIFIER_CTRL  = 512,
+    MODIFIER_ALT   = 1024,
+
+} KEY_MODIFIER;
+
 typedef struct
 {
     INPUT_EVENT     type;
@@ -47,12 +55,9 @@ typedef struct
     {
         struct
         {
+            u16     code;
             b8      is_repeat;
-            u8      vk_code;
             b8      is_down;
-            //b8      shift;
-            //b8      ctrl;
-            //b8      alt;
         };
         char        character;
     };

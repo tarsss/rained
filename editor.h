@@ -71,7 +71,6 @@ typedef struct
     u32 vsync_line_position;
     i32 pointer_x;
     i32 pointer_y;
-    i32 caret_x, caret_y;
 
 } cbuffer_t;
 
@@ -82,3 +81,11 @@ typedef struct
     u32 bg_color;
 
 } cell;
+
+typedef struct
+{
+    u32 line_in_text;
+    u32 pos_in_text;
+    u32 length;
+
+} chopped_line;

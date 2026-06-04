@@ -1118,70 +1118,81 @@ void __stdcall WinMainCRTStartup()
             }
             text_position = line_start;
         }
+
+        chopped_line *lines = arena_push(frame_arena, sizeof(chopped_line) * height, 8);
+        u32 num_lines = 0;
         
         u32 column = 0;
         u32 line = 0;
+        u32 line_start = text_position;
+
         while(line < height && text_position < text_size)
         {
             char c = text[text_position];
-            
-            if(text_position == caret_position)
-            {
-                // could catch a bug over here, when there is is mismatch between the caret position and the cached caret column/lines. yikes.
-            }
 
             if(c == '\n')
             {
+                lines[num_lines] = (chopped_line)
+                {
+                    .line_in_text = topmost_visible_line + line,
+                    .pos_in_text = line_start,
+                    .length = column,
+                };
+                num_lines++;
                 line++;
                 column = 0;
+                line_start = text_position + 1;
             }
-            else if(c == '\r')
+            else if(c != '\r')
             {
-                column = 0;
-            }
-            else
-            {
-                if(column < width)
-                {
-                    u32 cell_index = column + line * width;
-                    u32 text_color = 0x00FFFFFF;
-                    u32 bg_color = 0x00000000;
-
-                    if(topmost_visible_line + line == caret_line)
-                    {
-                        bg_color = 0x1F1F1F1F;
-                    }
-
-                    cells[cell_index] = (cell) 
-                    { 
-                        .atlas_index = c - 33,
-                        .text_color = text_color,
-                        .bg_color = bg_color,
-                    };
-                }
-                
                 column++;
             }
-            
+    
             text_position++;
         }
 
-        u32 view_offset_cell = view_offset_pixels < 0.0f ? view_offset_pixels : (i32)view_offset_pixels % cell_height;
-
-        i32 caret_x = cell_width * caret_column;
-        i32 caret_y = cell_height * caret_line - view_offset_pixels;
-
-        // caret blink...
+        b32 caret_blink = 0;
         u32 caret_period = 1000 * 1000;
-
-        if(time - caret_last_move_time > 500 * 1000)
+        if((time - caret_last_move_time) % caret_period > caret_period / 2)
         {
-            if((time - caret_last_move_time) % caret_period > caret_period / 2)
+            caret_blink = 1;
+        }
+
+        for(u32 i = 0; i < num_lines; i++)
+        {
+            chopped_line *l = &lines[i];
+            for(u32 j = 0; j < min(l->length, width); j++)
             {
-                // hide it.
-                caret_x = screen_w;
+                char c = text[l->pos_in_text + j];
+                u32 cell_index = j + i * width;
+                u32 text_color = 0x00FFFFFF;
+                u32 bg_color = 0x00000000;
+    
+                cells[cell_index] = (cell) 
+                { 
+                    .atlas_index = c - 33,
+                    .text_color = text_color,
+                    .bg_color = bg_color,
+                };
+            }
+
+            if(l->line_in_text == caret_line)
+            {
+                for(u32 j = 0; j < width; j++)
+                {
+                    cells[i * width + j].bg_color = 0x001F1F1F;
+                }
+                
+                if(!caret_blink)
+                {
+                    cell *c = &cells[caret_column + i * width];
+                    c->bg_color = ~c->bg_color;
+                    c->text_color = ~c->text_color;
+                }
             }
         }
+
+        u32 view_offset_cell = view_offset_pixels < 0.0f ? view_offset_pixels : (i32)view_offset_pixels % cell_height;
 
         cbuffer_t cb = 
         {
@@ -1194,9 +1205,7 @@ void __stdcall WinMainCRTStartup()
             .view_offset_pixels = view_offset_cell,
             .vsync_line_position = get_time_us() / 1000 % screen_w,
             .pointer_x = mouse_x,
-            .pointer_y = mouse_y,
-            .caret_x = caret_x,
-            .caret_y = caret_y,
+            .pointer_y = mouse_y
         };
 
         d3d11_write_buffer((ID3D11Resource*)cell_buffer, cells, cell_count * sizeof(cell));

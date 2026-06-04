@@ -21,7 +21,6 @@ cbuffer cb : register(b0)
     int view_offset_pixels;
     uint vsync_line_position;
     int pointer_x, pointer_y;
-    int caret_x, caret_y;
 }
 
 #define rgb(a,b,c) (float3(a,b,c) / 255.0f)
@@ -73,25 +72,6 @@ void shader_cs(uint2 pixel_pos : SV_DispatchThreadID)
 
     float3 text_color = unpack_color(c.text_color);
     float3 bg_color = unpack_color(c.bg_color);
-
-    // highlight the hovered cell
-#if 0
-    if(cell_index == get_cell_index(int2(pointer_x,pointer_y + view_offset_pixels)))
-    {
-        bg_color = 1.0f - bg_color;
-        text_color = 1.0f - text_color;
-    }
-#endif
-
-    // draw the caret and the line
-#if 1
-    uint2 d = (int2)pixel_pos - int2(caret_x, caret_y);
-    if(d.y < cell_height && d.x < cell_width)
-    {
-        bg_color = 1.0f - bg_color;
-        text_color = 1.0f - text_color;
-    }
-#endif
 
     if(c.index == 0)
     {

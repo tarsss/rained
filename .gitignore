@@ -1,0 +1,12 @@
+plan
+*.exe
+*.dll
+*.pdb
+*.lib
+*.exp
+*.asm
+*.dmp
+*.i
+*.rdi
+*.raddbg
+*.spall

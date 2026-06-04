@@ -1125,8 +1125,9 @@ void __stdcall WinMainCRTStartup()
         u32 column = 0;
         u32 line = 0;
         u32 line_start = text_position;
+        u32 line_start_column = 0;
 
-        while(line < height && text_position < text_size)
+        while(line < height && text_position < text_size && num_lines < height)
         {
             char c = text[text_position];
 
@@ -1135,17 +1136,36 @@ void __stdcall WinMainCRTStartup()
                 lines[num_lines] = (chopped_line)
                 {
                     .line_in_text = topmost_visible_line + line,
+                    .chop_offset = line_start_column,
                     .pos_in_text = line_start,
-                    .length = column,
+                    .length = text_position - line_start,
                 };
+                line_start = text_position + 1;
+                line_start_column = 0;
                 num_lines++;
                 line++;
                 column = 0;
-                line_start = text_position + 1;
             }
-            else if(c != '\r')
+            else
             {
-                column++;
+                if(text_position - line_start >= width - 1 && c > 31)
+                {
+                    lines[num_lines] = (chopped_line)
+                    {
+                        .line_in_text = topmost_visible_line + line,
+                        .chop_offset = line_start_column,
+                        .pos_in_text = line_start,
+                        .length = column,
+                    };
+                    line_start = text_position;
+                    line_start_column = column;
+                    num_lines++;
+                }
+
+                if(c != '\r')
+                {
+                    column++;
+                }
             }
     
             text_position++;
@@ -1185,9 +1205,12 @@ void __stdcall WinMainCRTStartup()
                 
                 if(!caret_blink)
                 {
-                    cell *c = &cells[caret_column + i * width];
-                    c->bg_color = ~c->bg_color;
-                    c->text_color = ~c->text_color;
+                    if(caret_column >= l->chop_offset)
+                    {
+                        cell *c = &cells[caret_column - l->chop_offset + i * width];
+                        c->bg_color = ~c->bg_color;
+                        c->text_color = ~c->text_color;
+                    }
                 }
             }
         }

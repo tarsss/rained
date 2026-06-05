@@ -699,27 +699,79 @@ void caret_move_down(caret *caret)
     caret_last_move_time = frame_start;
 }
 
-void caret_insert_characters(caret *caret, char *c, u32 count)
-{    
-    u32 p = caret->position;
-    for(u32 i = text_size + count - 1; i >= p + count; i--)
+void carets_bubble_sort_top_to_bottom()
+{
+    for(;;)
     {
-        text[i] = text[i - count];
+        u32 num_swaps = 0;
+        for(u32 i = 0; i < num_carets - 1; i++)
+        {
+            caret a = carets[i];
+            caret b = carets[i + 1];
+            if(a.position > b.position)
+            {
+                carets[i] = b;
+                carets[i + 1] = a;
+            }
+        }
+        if(num_swaps == 0)
+        {
+            break;
+        }
     }
-    for(u32 i = 0; i < count; i++)
-    {
-        text[p + i] = c[i];
-    }
-    text_size += count;
 }
 
-void caret_remove_characters_to_the_right(caret *caret, u32 count)
+void carets_insert_characters(char *characters, u32 count)
 {
-    for(u32 i = caret->position; i < text_size; i++)
+    carets_bubble_sort_top_to_bottom();
+    u32 offset = 0;
+    for(u32 c = 0; c < num_carets; c++)
     {
-        text[i] = text[i + count];
+        caret *caret = &carets[c];
+        caret->position += offset;
+        offset += count;
+        u32 p = caret->position;
+        for(u32 i = text_size + count - 1; i >= p + count; i--)
+        {
+            text[i] = text[i - count];
+        }
+        for(u32 i = 0; i < count; i++)
+        {
+            text[p + i] = characters[i];
+        }
+        text_size += count;
+        caret->position += count;
+        caret->wish_column = caret_get_column(caret);
     }
-    text_size -= count;
+}
+
+void carets_remove_characters(u32 count)
+{
+    carets_bubble_sort_top_to_bottom();
+    u32 offset = 0;
+    for(u32 c = 0; c < num_carets; c++)
+    {
+        caret *caret = &carets[c];
+        caret->position -= offset;
+        u32 num_to_remove = min(caret->position, count);
+        // dont leave a stray /r fuhhhh.
+        if(caret->position >= num_to_remove + 1)
+        {
+            if(text[caret->position - num_to_remove] == '\n' && 
+                text[caret->position - num_to_remove - 1] == '\r')
+            {
+                num_to_remove++;
+            }
+        }
+        offset += num_to_remove;
+        for(u32 i = caret->position - num_to_remove; i < text_size; i++)
+        {
+            text[i] = text[i + num_to_remove];
+        }
+        text_size -= num_to_remove;
+        caret->position -= num_to_remove;
+        caret->wish_column = caret_get_column(caret);
+    }
 }
 
 void caret_spawn_new_below()
@@ -1050,8 +1102,25 @@ void __stdcall WinMainCRTStartup()
                     }
                     if(e.code == (VK_UP | MODIFIER_ALT | MODIFIER_CTRL))
                     {
-                        caret_spawn_new_below();
-                    }
+                        caret_spawn_new_above();
+                    }       
+                }
+            }
+
+            if(e.type == INPUT_EVENT_TEXT)
+            {
+                if(e.character > 31)
+                {
+                    carets_insert_characters(&e.character, 1);
+                }
+                else if(e.character == '\r')
+                {
+                    char line_end[2] = { '\r', '\n' };
+                    carets_insert_characters(line_end, 2);
+                }
+                else if(e.character == '\b')
+                {
+                    carets_remove_characters(1);
                 }
             }
 
@@ -1077,34 +1146,6 @@ void __stdcall WinMainCRTStartup()
                         else if(e.code == VK_UP)
                         {
                             caret_move_up(caret);
-                        }
-                    }
-                }
-    
-                if(e.type == INPUT_EVENT_TEXT)
-                {
-                    if(e.character > 31)
-                    {
-                        caret_insert_characters(caret,&e.character, 1);
-                        caret_move_right(caret);
-                    }
-                    else if(e.character == '\r')
-                    {
-                        char line_end[2] = { '\r', '\n' };
-                        caret_insert_characters(caret, line_end, 2);
-                        caret_move_right(caret);
-                    }
-                    else if(e.character == '\b' && caret->position > 0)
-                    {
-                        if(caret->position > 1 && text[caret->position - 1] == '\n')
-                        {
-                            caret_move_left(caret);
-                            caret_remove_characters_to_the_right(caret, 2);
-                        }
-                        else
-                        {
-                            caret_move_left(caret);
-                            caret_remove_characters_to_the_right(caret, 1);
                         }
                     }
                 }

@@ -109,7 +109,7 @@ internal void mem_free(void *base)
     VirtualFree(base, 0, MEM_RELEASE);
 }
 
-void *memset(void *dest, int c, size_t count)
+internal void *memset(void *dest, int c, size_t count)
 {
     char *bytes = (char *)dest;
     while (count--)
@@ -119,7 +119,7 @@ void *memset(void *dest, int c, size_t count)
     return dest;
 }
 
-void *memcpy(void *dest, const void *src, size_t count)
+internal void *memcpy(void *dest, const void *src, size_t count)
 {
     char *dest8 = (char *)dest;
     const char *src8 = (const char *)src;
@@ -521,7 +521,7 @@ LRESULT window_callback(HWND window,
     return result;
 }
 
-ID3D11ShaderResourceView *d3d11_upload_bitmap(loaded_bitmap bitmap)
+internal ID3D11ShaderResourceView *d3d11_upload_bitmap(loaded_bitmap bitmap)
 {
     ID3D11ShaderResourceView* texture_view;
     D3D11_TEXTURE2D_DESC texture_desc =
@@ -549,7 +549,7 @@ ID3D11ShaderResourceView *d3d11_upload_bitmap(loaded_bitmap bitmap)
     return texture_view;
 }
 
-void resize_swapchain()
+internal void resize_swapchain()
 {
     if(rt_view)
     {
@@ -571,13 +571,13 @@ void resize_swapchain()
     ID3D11DeviceContext_CSSetUnorderedAccessViews(device_context, 0, 1, &uav, 0);
 }
 
-void busy_wait(u64 time_us)
+internal void busy_wait(u64 time_us)
 {
     u64 a = get_time_us() + time_us;
     while(get_time_us() < a) { }
 }
 
-u32 caret_get_column(caret *caret)
+internal u32 caret_get_column(caret *caret)
 {
     for(u32 i = caret->position; i >= 0; i--)
     {
@@ -593,7 +593,30 @@ u32 caret_get_column(caret *caret)
     return 0;
 }
 
-void caret_move_right(caret *caret)
+internal void merge_overlapping_carets_in_a_slow_way()
+{
+    u32 n = 0;
+    for(u32 i = 0; i < num_carets; i++)
+    {
+        b32 overlapped = 0;
+        for(i32 j = n; j >= 0; j--)
+        {
+            if(i != j && carets[i].position == carets[j].position)
+            {
+                overlapped = 1;
+                break;
+            }
+        }
+        if(!overlapped)
+        {
+            carets[n] = carets[i];
+            n++;
+        }
+    }  
+    num_carets = n;
+}
+
+internal void caret_move_right(caret *caret)
 {
     u32 p = caret->position;
     while(caret->position != text_size)
@@ -609,11 +632,11 @@ void caret_move_right(caret *caret)
             break;
         }
     }
-    caret_last_move_time = frame_start;
     caret->wish_column = caret_get_column(caret);
+    caret_last_move_time = frame_start;
 }
 
-void caret_move_left(caret *caret)
+internal void caret_move_left(caret *caret)
 {
     while(caret->position)
     {
@@ -628,11 +651,11 @@ void caret_move_left(caret *caret)
             break;
         }
     }
-    caret_last_move_time = frame_start;
     caret->wish_column = caret_get_column(caret);
+    caret_last_move_time = frame_start;
 }
 
-void caret_move_to_prev_line(caret *caret)
+internal void caret_move_to_prev_line(caret *caret)
 {
     while(caret->position)
     {
@@ -645,7 +668,7 @@ void caret_move_to_prev_line(caret *caret)
     }
 }
 
-void caret_move_to_line_start(caret *caret)
+internal void caret_move_to_line_start(caret *caret)
 {
     while(1)
     {
@@ -657,7 +680,7 @@ void caret_move_to_line_start(caret *caret)
     }
 }
 
-void caret_go_to_column(caret *caret, u32 col)
+internal void caret_go_to_column(caret *caret, u32 col)
 {
     caret_move_to_line_start(caret);
     u32 c = 0;
@@ -672,7 +695,7 @@ void caret_go_to_column(caret *caret, u32 col)
     }
 }
 
-void caret_move_to_next_line(caret *caret)
+internal void caret_move_to_next_line(caret *caret)
 {
     while(caret->position != text_size)
     {
@@ -685,21 +708,21 @@ void caret_move_to_next_line(caret *caret)
     }
 }
 
-void caret_move_up(caret *caret)
+internal void caret_move_up(caret *caret)
 {
     caret_move_to_prev_line(caret);
     caret_go_to_column(caret, caret->wish_column);
     caret_last_move_time = frame_start;
 }
 
-void caret_move_down(caret *caret)
+internal void caret_move_down(caret *caret)
 {
     caret_move_to_next_line(caret);
     caret_go_to_column(caret, caret->wish_column);
     caret_last_move_time = frame_start;
 }
 
-void carets_bubble_sort_top_to_bottom()
+internal void carets_bubble_sort_top_to_bottom()
 {
     for(;;)
     {
@@ -721,7 +744,7 @@ void carets_bubble_sort_top_to_bottom()
     }
 }
 
-void carets_insert_characters(char *characters, u32 count)
+internal void carets_insert_characters(char *characters, u32 count)
 {
     carets_bubble_sort_top_to_bottom();
     u32 offset = 0;
@@ -745,7 +768,7 @@ void carets_insert_characters(char *characters, u32 count)
     }
 }
 
-void carets_remove_characters(u32 count)
+internal void carets_remove_characters(u32 count)
 {
     carets_bubble_sort_top_to_bottom();
     u32 offset = 0;
@@ -774,7 +797,7 @@ void carets_remove_characters(u32 count)
     }
 }
 
-void caret_spawn_new_below()
+internal void caret_spawn_new_below()
 {
     caret bottom_caret = carets[0];
     for(u32 i = 0; i < num_carets; i++)
@@ -789,7 +812,7 @@ void caret_spawn_new_below()
     num_carets++;
 }
 
-void caret_spawn_new_above()
+internal void caret_spawn_new_above()
 {
     caret top_caret = carets[0];
     for(u32 i = 0; i < num_carets; i++)
@@ -1095,6 +1118,11 @@ void __stdcall WinMainCRTStartup()
                         {
                             toggle_fullscreen();
                         }
+                        if(e.code == VK_OEM_3)
+                        {
+                            carets[0] = carets[num_carets - 1];
+                            num_carets = 1;
+                        }
                     }
                     if(e.code == (VK_DOWN | MODIFIER_ALT | MODIFIER_CTRL))
                     {
@@ -1109,7 +1137,7 @@ void __stdcall WinMainCRTStartup()
 
             if(e.type == INPUT_EVENT_TEXT)
             {
-                if(e.character > 31)
+                if(e.character > 31 && e.character != '`') // i've lost my enter key
                 {
                     carets_insert_characters(&e.character, 1);
                 }
@@ -1151,6 +1179,7 @@ void __stdcall WinMainCRTStartup()
                 }
             }
 
+            merge_overlapping_carets_in_a_slow_way();
         }
 
         ////////////////////////////////////////////////////////////////////////////////

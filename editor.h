@@ -90,7 +90,6 @@ typedef struct
 typedef struct
 {
     u32 line_in_text;
-    u32 chop_offset;
     u32 pos_in_text;
     u32 length;
 

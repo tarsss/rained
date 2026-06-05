@@ -77,8 +77,6 @@ u64                         frame_start;
 typedef struct
 {
     u32 position;
-    u32 column;
-    u32 line;
     u32 wish_column;
     
 } caret;
@@ -604,7 +602,6 @@ void caret_move_right(caret *caret)
         caret->position++;
         if(c == '\n')
         {
-            caret->line++;
             break;
         }
         if(c > 31)
@@ -613,8 +610,7 @@ void caret_move_right(caret *caret)
         }
     }
     caret_last_move_time = frame_start;
-    caret->column = caret_get_column(caret);
-    caret->wish_column = caret->column;
+    caret->wish_column = caret_get_column(caret);
 }
 
 void caret_move_left(caret *caret)
@@ -625,7 +621,6 @@ void caret_move_left(caret *caret)
         char c = text[caret->position];
         if(c == '\r')
         {
-            caret->line--;
             break;
         }
         if(c > 31)
@@ -634,8 +629,7 @@ void caret_move_left(caret *caret)
         }
     }
     caret_last_move_time = frame_start;
-    caret->column = caret_get_column(caret);
-    caret->wish_column = caret->column;
+    caret->wish_column = caret_get_column(caret);
 }
 
 void caret_move_to_prev_line(caret *caret)
@@ -645,7 +639,6 @@ void caret_move_to_prev_line(caret *caret)
         if(text[caret->position] == '\n')
         {
             caret->position--;
-            caret->line--;
             break;
         }
         caret->position--;
@@ -686,7 +679,6 @@ void caret_move_to_next_line(caret *caret)
         if(text[caret->position] == '\n')
         {
             caret->position++;
-            caret->line++;
             break;
         }
         caret->position++;
@@ -697,7 +689,6 @@ void caret_move_up(caret *caret)
 {
     caret_move_to_prev_line(caret);
     caret_go_to_column(caret, caret->wish_column);
-    caret->column = caret_get_column(caret);
     caret_last_move_time = frame_start;
 }
 
@@ -705,7 +696,6 @@ void caret_move_down(caret *caret)
 {
     caret_move_to_next_line(caret);
     caret_go_to_column(caret, caret->wish_column);
-    caret->column = caret_get_column(caret);
     caret_last_move_time = frame_start;
 }
 
@@ -737,7 +727,7 @@ void caret_spawn_new_below()
     caret bottom_caret = carets[0];
     for(u32 i = 0; i < num_carets; i++)
     {
-        if(carets[i].line > bottom_caret.line)
+        if(carets[i].position > bottom_caret.position)
         {
             bottom_caret = carets[i];
         }
@@ -752,7 +742,7 @@ void caret_spawn_new_above()
     caret top_caret = carets[0];
     for(u32 i = 0; i < num_carets; i++)
     {
-        if(carets[i].line < top_caret.line)
+        if(carets[i].position < top_caret.position)
         {
             top_caret = carets[i];
         }
@@ -1196,7 +1186,6 @@ void __stdcall WinMainCRTStartup()
         u32 column = 0;
         u32 line = 0;
         u32 line_start = text_position;
-        u32 line_start_column = 0;
 
         while(line < height && text_position < text_size && num_lines < height)
         {
@@ -1207,12 +1196,10 @@ void __stdcall WinMainCRTStartup()
                 lines[num_lines] = (chopped_line)
                 {
                     .line_in_text = topmost_visible_line + line,
-                    .chop_offset = line_start_column,
                     .pos_in_text = line_start,
                     .length = text_position - line_start,
                 };
                 line_start = text_position + 1;
-                line_start_column = 0;
                 num_lines++;
                 line++;
                 column = 0;
@@ -1224,12 +1211,10 @@ void __stdcall WinMainCRTStartup()
                     lines[num_lines] = (chopped_line)
                     {
                         .line_in_text = topmost_visible_line + line,
-                        .chop_offset = line_start_column,
                         .pos_in_text = line_start,
                         .length = text_position - line_start,
                     };
                     line_start = text_position;
-                    line_start_column = column;
                     num_lines++;
                 }
 
@@ -1270,7 +1255,7 @@ void __stdcall WinMainCRTStartup()
             for(u32 k = 0; k < num_carets; k++)
             {
                 caret *caret = &carets[k];
-                if(l->line_in_text == caret->line)
+                if(caret->position >= l->pos_in_text && caret->position < l->pos_in_text + l->length)
                 {
                     for(u32 j = 0; j < width; j++)
                     {
@@ -1282,16 +1267,13 @@ void __stdcall WinMainCRTStartup()
             for(u32 k = 0; k < num_carets; k++)
             {
                 caret *caret = &carets[k];
-                if(l->line_in_text == caret->line)
-                {                    
+                if(caret->position >= l->pos_in_text && caret->position < l->pos_in_text + l->length)          
+                {      
                     if(!caret_blink)
                     {
-                        if(caret->column >= l->chop_offset)
-                        {
-                            cell *c = &cells[caret->column - l->chop_offset + i * width];
-                            c->bg_color = ~c->bg_color;
-                            c->text_color = ~c->text_color;
-                        }
+                        cell *c = &cells[caret->position - l->pos_in_text + i * width];
+                        c->bg_color = ~c->bg_color;
+                        c->text_color = ~c->text_color;
                     }
                 }
             }

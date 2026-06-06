@@ -112,13 +112,19 @@ typedef enum
 
 typedef struct
 {
-    u32     count;
+    u32     *lengths;
 
 } text_edit_delete;
 
 typedef struct
 {
-    char    *characters; 
-    u32     count;
+    char    *p;
+    u32     length;
+
+} string;
+
+typedef struct
+{
+    string  *strings;
 
 } text_edit_insert;

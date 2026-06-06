@@ -76,6 +76,9 @@ u64                         frame_start;
 
 u64 caret_last_move_time;
 
+arena   *forever_arena;
+arena   *frame_arena;
+
 // view
 u32                         cell_buffer_count;
 f32                         view_offset_pixels;
@@ -88,8 +91,7 @@ struct undo_buffer_entry
     text_edit_kind      kind;
     caret               *carets;
     u32                 num_carets; 
-    char                *characters; 
-    u32                 count;
+    string              *strings;
     undo_buffer_entry   *next;
     undo_buffer_entry   *prev;
 
@@ -295,6 +297,7 @@ internal void arena_release(arena *arena)
     mem_free(arena->base);
 }
 
+#define arena_push_zero(a,s,al) (memset(arena_push(a, s, al), 0, s)) 
 #define arena_push_struct(a, s) (arena_push(a, sizeof(s), 8))
 #define arena_push_struct_zero(a, s) (memset(arena_push(a, sizeof(s), 8), 0, sizeof(s)))
 #define arena_copy(a, p, s) (memcpy(arena_push(a, s, 8), p, s))
@@ -780,20 +783,21 @@ internal void carets_insert_characters(text_edit_insert insert, b32 write_undo)
     u32 offset = 0;
     for(u32 c = 0; c < num_carets; c++)
     {
+        string s = insert.strings[0];
         caret *caret = &carets[c];
         caret->position += offset;
-        offset += insert.count;
+        offset += s.length;
         u32 p = caret->position;
-        for(u32 i = text_size + insert.count - 1; i >= p + insert.count; i--)
+        for(u32 i = text_size + s.length - 1; i >= p + s.length; i--)
         {
-            text[i] = text[i - insert.count];
+            text[i] = text[i - s.length];
         }
-        for(u32 i = 0; i < insert.count; i++)
+        for(u32 i = 0; i < s.length; i++)
         {
-            text[p + i] = insert.characters[i];
+            text[p + i] = s.p[i];
         }
-        text_size += insert.count;
-        caret->position += insert.count;
+        text_size += s.length;
+        caret->position += s.length;
         caret->wish_column = caret_get_column(caret);
     }
     if(write_undo)
@@ -803,23 +807,37 @@ internal void carets_insert_characters(text_edit_insert insert, b32 write_undo)
         {
             .kind = TEXT_EDIT_INSERT,
             .carets = arena_copy(undo_buffer_arena, carets, sizeof(caret) * num_carets),
-            .characters = arena_copy(undo_buffer_arena, insert.characters, insert.count),
-            .count = insert.count,
             .num_carets = num_carets
         };
+        e->strings = arena_push(undo_buffer_arena, num_carets * sizeof(string), 8);
+        for(u32 i = 0; i < num_carets; i++)
+        {
+            e->strings[i].length = insert.strings[i].length;
+            e->strings[i].p = arena_copy(undo_buffer_arena, insert.strings[i].p, insert.strings[i].length);
+        }
         undo_buffer_push(e);
     }
 }
 
 internal void carets_remove_characters(text_edit_delete delete, b32 write_undo)
 {
+    undo_buffer_entry *e = arena_push_struct(undo_buffer_arena, undo_buffer_entry);
+    if(write_undo)
+    {
+        *e = (undo_buffer_entry)
+        {
+            .kind = TEXT_EDIT_DELETE,
+            .strings = arena_push_zero(undo_buffer_arena, sizeof(string) * num_carets, 8),
+            .num_carets = num_carets,
+        };
+    }
     carets_bubble_sort_top_to_bottom();
     u32 offset = 0;
     for(u32 c = 0; c < num_carets; c++)
     {
         caret *caret = &carets[c];
         caret->position -= offset;
-        u32 num_to_remove = min(caret->position, delete.count);
+        u32 num_to_remove = min(delete.lengths[c], caret->position);
         // dont leave a stray /r fuhhhh.
         if(caret->position >= num_to_remove + 1)
         {
@@ -828,6 +846,12 @@ internal void carets_remove_characters(text_edit_delete delete, b32 write_undo)
             {
                 num_to_remove++;
             }
+        }
+        if(write_undo)
+        {
+            e->strings[c].p = arena_copy(undo_buffer_arena, text + caret->position - num_to_remove, num_to_remove);
+            e->strings[c].length = num_to_remove;
+
         }
         offset += num_to_remove;
         for(u32 i = caret->position - num_to_remove; i < text_size; i++)
@@ -840,14 +864,7 @@ internal void carets_remove_characters(text_edit_delete delete, b32 write_undo)
     }
     if(write_undo)
     {
-        undo_buffer_entry *e = arena_push_struct(undo_buffer_arena, undo_buffer_entry);
-        *e = (undo_buffer_entry)
-        {
-            .kind = TEXT_EDIT_DELETE,
-            .carets = arena_copy(undo_buffer_arena, carets, sizeof(caret) * num_carets),
-            .count = delete.count,
-            .num_carets = num_carets
-        };
+        e->carets = arena_copy(undo_buffer_arena, carets, sizeof(caret) * num_carets),
         undo_buffer_push(e);
     }
 }
@@ -902,8 +919,7 @@ internal void undo()
                 num_carets = entry->num_carets;
                 text_edit_insert insert = 
                 {
-                    .characters = entry->characters,
-                    .count = entry->count,
+                    .strings = entry->strings,
                 };
                 carets_insert_characters(insert, 0);
                 break;
@@ -912,15 +928,23 @@ internal void undo()
             {
                 memcpy(carets, entry->carets, sizeof(caret) * entry->num_carets);
                 num_carets = entry->num_carets;
+                u32 *lengths = arena_push(frame_arena, sizeof(u32) * entry->num_carets, 8);
+                for(u32 i = 0; i < entry->num_carets; i++)
+                {
+                    lengths[i] = entry->strings[i].length;
+                }
                 text_edit_delete delete = 
                 {
-                    .count = entry->count,
+                    .lengths = lengths,
                 };
                 carets_remove_characters(delete, 0);
                 break;
             }
         }
-        undo_buffer_position = entry->prev;
+        if(entry->prev)
+        {
+            undo_buffer_position = entry->prev;
+        }
     }
 }
 
@@ -937,9 +961,14 @@ internal void redo()
                 {
                     memcpy(carets, entry->carets, sizeof(caret) * entry->num_carets);
                     num_carets = entry->num_carets;
+                    u32 *lengths = arena_push(frame_arena, sizeof(u32) * entry->num_carets, 8);
+                    for(u32 i = 0; i < entry->num_carets; i++)
+                    {
+                        lengths[i] = entry->strings[i].length;
+                    }
                     text_edit_delete delete = 
                     {
-                        .count = entry->count,
+                        .lengths = lengths,
                     };
                     carets_remove_characters(delete, 0);
                     break;
@@ -951,13 +980,12 @@ internal void redo()
                     u32 offset = 0;
                     for(u32 i = 0; i < num_carets; i++)
                     {
-                        offset += entry->count;
+                        offset += entry->strings[i].length;
                         carets[i].position -= offset;
                     }
                     text_edit_insert insert = 
                     {
-                        .characters = entry->characters,
-                        .count = entry->count,
+                        .strings = entry->strings,
                     };
                     carets_insert_characters(insert, 0);
                     break;
@@ -1190,8 +1218,8 @@ void __stdcall WinMainCRTStartup()
     ID3D11Buffer *cell_buffer;
     ID3D11ShaderResourceView *cell_buffer_srv;
 
-    arena *forever_arena = arena_alloc(gigabytes(1), megabytes(1));
-    arena *frame_arena = arena_alloc(gigabytes(1), megabytes(1));
+    forever_arena = arena_alloc(gigabytes(1), megabytes(1));
+    frame_arena = arena_alloc(gigabytes(1), megabytes(1));
     
     text_arena = arena_alloc(gigabytes(1), megabytes(1));
     undo_buffer_arena = arena_alloc(gigabytes(1), megabytes(1));
@@ -1292,9 +1320,16 @@ void __stdcall WinMainCRTStartup()
                 {
                     text_edit_insert insert = 
                     {
-                        .characters = &e.character,
-                        .count = 1,
+                        .strings = arena_push(frame_arena, sizeof(string) * num_carets, 8)
                     };
+                    for(u32 j = 0; j < num_carets; j++)
+                    {
+                        insert.strings[j] = (string)
+                        {
+                            .p = &e.character,
+                            .length = 1
+                        };
+                    }
                     carets_insert_characters(insert, 1);
                 }
                 else if(e.character == '\r')
@@ -1302,17 +1337,28 @@ void __stdcall WinMainCRTStartup()
                     char line_end[2] = { '\r', '\n' };
                     text_edit_insert insert = 
                     {
-                        .characters = line_end,
-                        .count = 2,
+                        .strings = arena_push(frame_arena, sizeof(string) * num_carets, 8)
                     };
+                    for(u32 j = 0; j < num_carets; j++)
+                    {
+                        insert.strings[j] = (string)
+                        {
+                            .p = line_end,
+                            .length = 2
+                        };
+                    }
                     carets_insert_characters(insert, 1);
                 }
                 else if(e.character == '\b')
                 {
                     text_edit_delete delete = 
                     {
-                        .count = 1,
+                        .lengths = arena_push(frame_arena, sizeof(u32) * num_carets, 8)
                     };
+                    for(u32 j = 0; j < num_carets; j++)
+                    {
+                        delete.lengths[j] = 1;
+                    }
                     carets_remove_characters(delete, 1);
                 }
             }

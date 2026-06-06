@@ -74,13 +74,6 @@ i32                         mouse_x, mouse_y;
 char                        buf[64]; // for sprintf, dumb
 u64                         frame_start;
 
-typedef struct
-{
-    u32 position;
-    u32 wish_column;
-    
-} caret;
-
 u64 caret_last_move_time;
 
 // view
@@ -89,10 +82,26 @@ f32                         view_offset_pixels;
 caret                       carets[1024];
 u32                         num_carets = 1;
 
+typedef struct undo_buffer_entry undo_buffer_entry;
+struct undo_buffer_entry
+{
+    text_edit_kind      kind;
+    caret               *carets;
+    u32                 num_carets; 
+    char                *characters; 
+    u32                 count;
+    undo_buffer_entry   *next;
+    undo_buffer_entry   *prev;
+
+};
+
 // buffer
 arena   *text_arena;
 char    *text;
 u32     text_size;
+arena   *undo_buffer_arena;
+undo_buffer_entry *undo_buffer_head;
+undo_buffer_entry *undo_buffer_position;
 
 internal void mem_reserve(u64 size, void **address)
 {
@@ -285,6 +294,10 @@ internal void arena_release(arena *arena)
 {
     mem_free(arena->base);
 }
+
+#define arena_push_struct(a, s) (arena_push(a, sizeof(s), 8))
+#define arena_push_struct_zero(a, s) (memset(arena_push(a, sizeof(s), 8), 0, sizeof(s)))
+#define arena_copy(a, p, s) (memcpy(arena_push(a, s, 8), p, s))
 
 internal void win32_assert()
 {
@@ -735,6 +748,7 @@ internal void carets_bubble_sort_top_to_bottom()
             {
                 carets[i] = b;
                 carets[i + 1] = a;
+                num_swaps++; 
             }
         }
         if(num_swaps == 0)
@@ -744,7 +758,23 @@ internal void carets_bubble_sort_top_to_bottom()
     }
 }
 
-internal void carets_insert_characters(char *characters, u32 count)
+internal void undo_buffer_push(undo_buffer_entry *entry)
+{
+    if(undo_buffer_head)
+    {
+        undo_buffer_head->next = entry;
+        entry->prev = undo_buffer_head;
+        undo_buffer_head = entry;
+        undo_buffer_position = entry;
+    }
+    else
+    {
+        undo_buffer_head = entry;
+        undo_buffer_position = entry;
+    }
+}
+
+internal void carets_insert_characters(text_edit_insert insert, b32 write_undo)
 {
     carets_bubble_sort_top_to_bottom();
     u32 offset = 0;
@@ -752,23 +782,36 @@ internal void carets_insert_characters(char *characters, u32 count)
     {
         caret *caret = &carets[c];
         caret->position += offset;
-        offset += count;
+        offset += insert.count;
         u32 p = caret->position;
-        for(u32 i = text_size + count - 1; i >= p + count; i--)
+        for(u32 i = text_size + insert.count - 1; i >= p + insert.count; i--)
         {
-            text[i] = text[i - count];
+            text[i] = text[i - insert.count];
         }
-        for(u32 i = 0; i < count; i++)
+        for(u32 i = 0; i < insert.count; i++)
         {
-            text[p + i] = characters[i];
+            text[p + i] = insert.characters[i];
         }
-        text_size += count;
-        caret->position += count;
+        text_size += insert.count;
+        caret->position += insert.count;
         caret->wish_column = caret_get_column(caret);
+    }
+    if(write_undo)
+    {
+        undo_buffer_entry *e = arena_push_struct(undo_buffer_arena, undo_buffer_entry);
+        *e = (undo_buffer_entry)
+        {
+            .kind = TEXT_EDIT_INSERT,
+            .carets = arena_copy(undo_buffer_arena, carets, sizeof(caret) * num_carets),
+            .characters = arena_copy(undo_buffer_arena, insert.characters, insert.count),
+            .count = insert.count,
+            .num_carets = num_carets
+        };
+        undo_buffer_push(e);
     }
 }
 
-internal void carets_remove_characters(u32 count)
+internal void carets_remove_characters(text_edit_delete delete, b32 write_undo)
 {
     carets_bubble_sort_top_to_bottom();
     u32 offset = 0;
@@ -776,7 +819,7 @@ internal void carets_remove_characters(u32 count)
     {
         caret *caret = &carets[c];
         caret->position -= offset;
-        u32 num_to_remove = min(caret->position, count);
+        u32 num_to_remove = min(caret->position, delete.count);
         // dont leave a stray /r fuhhhh.
         if(caret->position >= num_to_remove + 1)
         {
@@ -794,6 +837,18 @@ internal void carets_remove_characters(u32 count)
         text_size -= num_to_remove;
         caret->position -= num_to_remove;
         caret->wish_column = caret_get_column(caret);
+    }
+    if(write_undo)
+    {
+        undo_buffer_entry *e = arena_push_struct(undo_buffer_arena, undo_buffer_entry);
+        *e = (undo_buffer_entry)
+        {
+            .kind = TEXT_EDIT_DELETE,
+            .carets = arena_copy(undo_buffer_arena, carets, sizeof(caret) * num_carets),
+            .count = delete.count,
+            .num_carets = num_carets
+        };
+        undo_buffer_push(e);
     }
 }
 
@@ -825,6 +880,92 @@ internal void caret_spawn_new_above()
     carets[num_carets] = top_caret;
     caret_move_up(&carets[num_carets]);
     num_carets++;
+}
+
+/*
+h e l l o (space, push) world (undo -> push 'world' -> undo head / 'world')
+t e s t (del, del) -> undo -> push 's, t' delete
+
+so, we're keeping track of the current edit. we push edits, on events e.g whitespace or on undo.
+*/
+
+internal void undo()
+{
+    undo_buffer_entry *entry = undo_buffer_position;
+    if(entry)
+    {
+        switch(entry->kind)
+        {
+            case TEXT_EDIT_DELETE:
+            {
+                memcpy(carets, entry->carets, sizeof(caret) * entry->num_carets);
+                num_carets = entry->num_carets;
+                text_edit_insert insert = 
+                {
+                    .characters = entry->characters,
+                    .count = entry->count,
+                };
+                carets_insert_characters(insert, 0);
+                break;
+            }
+            case TEXT_EDIT_INSERT:
+            {
+                memcpy(carets, entry->carets, sizeof(caret) * entry->num_carets);
+                num_carets = entry->num_carets;
+                text_edit_delete delete = 
+                {
+                    .count = entry->count,
+                };
+                carets_remove_characters(delete, 0);
+                break;
+            }
+        }
+        undo_buffer_position = entry->prev;
+    }
+}
+
+internal void redo()
+{
+    if(undo_buffer_position)
+    {
+        undo_buffer_entry *entry = undo_buffer_position->next;
+        if(entry)
+        {
+            switch(entry->kind)
+            {
+                case TEXT_EDIT_DELETE:
+                {
+                    memcpy(carets, entry->carets, sizeof(caret) * entry->num_carets);
+                    num_carets = entry->num_carets;
+                    text_edit_delete delete = 
+                    {
+                        .count = entry->count,
+                    };
+                    carets_remove_characters(delete, 0);
+                    break;
+                }
+                case TEXT_EDIT_INSERT:
+                {
+                    memcpy(carets, entry->carets, sizeof(caret) * entry->num_carets);
+                    num_carets = entry->num_carets;
+                    u32 offset = 0;
+                    for(u32 i = 0; i < num_carets; i++)
+                    {
+                        offset += entry->count;
+                        carets[i].position -= offset;
+                    }
+                    text_edit_insert insert = 
+                    {
+                        .characters = entry->characters,
+                        .count = entry->count,
+                    };
+                    carets_insert_characters(insert, 0);
+                    break;
+                }
+            }
+            undo_buffer_position = entry;
+        }
+    }
 }
 
 void __stdcall WinMainCRTStartup()
@@ -1053,6 +1194,7 @@ void __stdcall WinMainCRTStartup()
     arena *frame_arena = arena_alloc(gigabytes(1), megabytes(1));
     
     text_arena = arena_alloc(gigabytes(1), megabytes(1));
+    undo_buffer_arena = arena_alloc(gigabytes(1), megabytes(1));
     text = win32_read_file("editor.c", &text_size, text_arena);
 
     PROFILE_END();
@@ -1112,7 +1254,7 @@ void __stdcall WinMainCRTStartup()
             {
                 if(e.type == INPUT_EVENT_KEY)
                 {
-                    if(!e.is_repeat)
+                    //if(!e.is_repeat)
                     {
                         if(e.code == VK_F11)
                         {
@@ -1124,14 +1266,23 @@ void __stdcall WinMainCRTStartup()
                             num_carets = 1;
                         }
                     }
+
                     if(e.code == (VK_DOWN | MODIFIER_ALT | MODIFIER_CTRL))
                     {
                         caret_spawn_new_below();
                     }
-                    if(e.code == (VK_UP | MODIFIER_ALT | MODIFIER_CTRL))
+                    else if(e.code == (VK_UP | MODIFIER_ALT | MODIFIER_CTRL))
                     {
                         caret_spawn_new_above();
-                    }       
+                    }
+                    else if(e.code == ('Z' | MODIFIER_CTRL))
+                    {
+                        undo();
+                    }
+                    else if(e.code == ('Y' | MODIFIER_CTRL))
+                    {
+                        redo();
+                    }
                 }
             }
 
@@ -1139,16 +1290,30 @@ void __stdcall WinMainCRTStartup()
             {
                 if(e.character > 31 && e.character != '`') // i've lost my enter key
                 {
-                    carets_insert_characters(&e.character, 1);
+                    text_edit_insert insert = 
+                    {
+                        .characters = &e.character,
+                        .count = 1,
+                    };
+                    carets_insert_characters(insert, 1);
                 }
                 else if(e.character == '\r')
                 {
                     char line_end[2] = { '\r', '\n' };
-                    carets_insert_characters(line_end, 2);
+                    text_edit_insert insert = 
+                    {
+                        .characters = line_end,
+                        .count = 2,
+                    };
+                    carets_insert_characters(insert, 1);
                 }
                 else if(e.character == '\b')
                 {
-                    carets_remove_characters(1);
+                    text_edit_delete delete = 
+                    {
+                        .count = 1,
+                    };
+                    carets_remove_characters(delete, 1);
                 }
             }
 

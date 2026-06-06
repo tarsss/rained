@@ -94,3 +94,31 @@ typedef struct
     u32 length;
 
 } chopped_line;
+
+
+typedef struct
+{
+    u32 position;
+    u32 wish_column;
+    
+} caret;
+
+typedef enum
+{
+    TEXT_EDIT_INSERT,
+    TEXT_EDIT_DELETE,
+
+} text_edit_kind;
+
+typedef struct
+{
+    u32     count;
+
+} text_edit_delete;
+
+typedef struct
+{
+    char    *characters; 
+    u32     count;
+
+} text_edit_insert;

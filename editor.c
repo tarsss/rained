@@ -782,21 +782,24 @@ internal void carets_insert_characters(text_edit_insert insert, b32 write_undo)
     u32 offset = 0;
     for(u32 c = 0; c < num_carets; c++)
     {
-        string s = insert.strings[0];
+        string s = insert.strings[c];
         caret *caret = &carets[c];
-        caret->position += offset;
-        offset += s.length;
-        u32 p = caret->position;
-        for(u32 i = text_size + s.length - 1; i >= p + s.length; i--)
+        if(s.length)
         {
-            text[i] = text[i - s.length];
+            caret->position += offset;
+            offset += s.length;
+            u32 p = caret->position;
+            for(u32 i = text_size + s.length - 1; i >= p + s.length; i--)
+            {
+                text[i] = text[i - s.length];
+            }
+            for(u32 i = 0; i < s.length; i++)
+            {
+                text[p + i] = s.p[i];
+            }
+            text_size += s.length;
+            caret->position += s.length;
         }
-        for(u32 i = 0; i < s.length; i++)
-        {
-            text[p + i] = s.p[i];
-        }
-        text_size += s.length;
-        caret->position += s.length;
         caret->wish_column = caret_get_column(caret);
     }
     if(write_undo)
@@ -818,6 +821,7 @@ internal void carets_insert_characters(text_edit_insert insert, b32 write_undo)
     }
 }
 
+// todo: don't push undo when each num_to_remove = 0
 internal void carets_remove_characters(text_edit_delete delete, b32 write_undo)
 {
     undo_buffer_entry *e = arena_push_struct(undo_buffer_arena, undo_buffer_entry);
@@ -850,7 +854,6 @@ internal void carets_remove_characters(text_edit_delete delete, b32 write_undo)
         {
             e->strings[c].p = arena_copy(undo_buffer_arena, text + caret->position - num_to_remove, num_to_remove);
             e->strings[c].length = num_to_remove;
-
         }
         offset += num_to_remove;
         for(u32 i = caret->position - num_to_remove; i < text_size; i++)
@@ -1236,7 +1239,7 @@ void __stdcall WinMainCRTStartup()
     
     text_arena = arena_alloc(gigabytes(1), megabytes(1));
     undo_buffer_arena = arena_alloc(gigabytes(1), megabytes(1));
-    text = win32_read_file("editor.c", &text_size, text_arena);
+    text = win32_read_file("test.txt", &text_size, text_arena);
 
     PROFILE_END();
 

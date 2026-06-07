@@ -102,7 +102,6 @@ arena   *text_arena;
 char    *text;
 u32     text_size;
 arena   *undo_buffer_arena;
-undo_buffer_entry *undo_buffer_head;
 undo_buffer_entry *undo_buffer_tail;
 undo_buffer_entry *undo_buffer_position;
 
@@ -764,16 +763,14 @@ internal void carets_bubble_sort_top_to_bottom()
 
 internal void undo_buffer_push(undo_buffer_entry *entry)
 {
-    if(undo_buffer_head)
+    if(undo_buffer_position)
     {
-        undo_buffer_head->next = entry;
-        entry->prev = undo_buffer_head;
-        undo_buffer_head = entry;
+        undo_buffer_position->next = entry;
+        entry->prev = undo_buffer_position;
         undo_buffer_position = entry;
     }
     else
     {
-        undo_buffer_head = entry;
         undo_buffer_position = entry;
         undo_buffer_tail = entry;
     }
@@ -951,7 +948,7 @@ internal void redo()
 {
     if(undo_buffer_position)
     {
-        if(undo_buffer_position != undo_buffer_head)
+        if(undo_buffer_position->next)
         {
             undo_buffer_position = undo_buffer_position->next;
         }

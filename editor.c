@@ -103,6 +103,7 @@ char    *text;
 u32     text_size;
 arena   *undo_buffer_arena;
 undo_buffer_entry *undo_buffer_head;
+undo_buffer_entry *undo_buffer_tail;
 undo_buffer_entry *undo_buffer_position;
 
 internal void mem_reserve(u64 size, void **address)
@@ -774,6 +775,7 @@ internal void undo_buffer_push(undo_buffer_entry *entry)
     {
         undo_buffer_head = entry;
         undo_buffer_position = entry;
+        undo_buffer_tail = entry;
     }
 }
 
@@ -941,10 +943,7 @@ internal void undo()
                 break;
             }
         }
-        if(entry->prev)
-        {
-            undo_buffer_position = entry->prev;
-        }
+        undo_buffer_position = entry->prev;
     }
 }
 
@@ -952,46 +951,63 @@ internal void redo()
 {
     if(undo_buffer_position)
     {
-        undo_buffer_entry *entry = undo_buffer_position->next;
-        if(entry)
+        if(undo_buffer_position != undo_buffer_head)
         {
-            switch(entry->kind)
+            undo_buffer_position = undo_buffer_position->next;
+        }
+        else
+        {
+            return;
+        }
+    }
+    else
+    {
+        undo_buffer_position = undo_buffer_tail;
+    }
+    undo_buffer_entry *entry = undo_buffer_position;
+    if(entry)
+    {
+        switch(entry->kind)
+        {
+            case TEXT_EDIT_DELETE:
             {
-                case TEXT_EDIT_DELETE:
+                memcpy(carets, entry->carets, sizeof(caret) * entry->num_carets);
+                num_carets = entry->num_carets;
+                u32 *lengths = arena_push(frame_arena, sizeof(u32) * entry->num_carets, 8);
+                for(u32 i = 0; i < entry->num_carets; i++)
                 {
-                    memcpy(carets, entry->carets, sizeof(caret) * entry->num_carets);
-                    num_carets = entry->num_carets;
-                    u32 *lengths = arena_push(frame_arena, sizeof(u32) * entry->num_carets, 8);
-                    for(u32 i = 0; i < entry->num_carets; i++)
-                    {
-                        lengths[i] = entry->strings[i].length;
-                    }
-                    text_edit_delete delete = 
-                    {
-                        .lengths = lengths,
-                    };
-                    carets_remove_characters(delete, 0);
-                    break;
+                    lengths[i] = entry->strings[i].length;
                 }
-                case TEXT_EDIT_INSERT:
+                text_edit_delete delete = 
                 {
-                    memcpy(carets, entry->carets, sizeof(caret) * entry->num_carets);
-                    num_carets = entry->num_carets;
-                    u32 offset = 0;
-                    for(u32 i = 0; i < num_carets; i++)
-                    {
-                        offset += entry->strings[i].length;
-                        carets[i].position -= offset;
-                    }
-                    text_edit_insert insert = 
-                    {
-                        .strings = entry->strings,
-                    };
-                    carets_insert_characters(insert, 0);
-                    break;
+                    .lengths = lengths,
+                };
+                u32 offset = 0;
+                for(u32 i = 0; i < num_carets; i++)
+                {
+                    offset += entry->strings[i].length;
+                    carets[i].position += offset;
                 }
+                carets_remove_characters(delete, 0);
+                break;
             }
-            undo_buffer_position = entry;
+            case TEXT_EDIT_INSERT:
+            {
+                memcpy(carets, entry->carets, sizeof(caret) * entry->num_carets);
+                num_carets = entry->num_carets;
+                u32 offset = 0;
+                for(u32 i = 0; i < num_carets; i++)
+                {
+                    offset += entry->strings[i].length;
+                    carets[i].position -= offset;
+                }
+                text_edit_insert insert = 
+                {
+                    .strings = entry->strings,
+                };
+                carets_insert_characters(insert, 0);
+                break;
+            }
         }
     }
 }

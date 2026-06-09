@@ -545,13 +545,6 @@ void __stdcall WinMainCRTStartup()
     ID3D11Buffer *cell_buffer;
     ID3D11ShaderResourceView *cell_buffer_srv;
 
-    forever_arena = arena_alloc(gb(1), mb(1));
-    frame_arena = arena_alloc(gb(1), mb(1));
-    
-    text_arena = arena_alloc(gb(1), mb(1));
-    undo_buffer_arena = arena_alloc(gb(1), mb(1));
-    text = os_read_file("test.txt", &text_size, text_arena);
-
     PROFILE_END();
 
     u64 prev_frame;
@@ -588,7 +581,6 @@ void __stdcall WinMainCRTStartup()
         PROFILE_END();
 
         mouse_wheel_delta = (f32) mouse_wheel_delta_accum / 120.0f * 32.0f;
-        view_offset_pixels -= mouse_wheel_delta;
 
         if(screen_w != new_screen_w || screen_h != new_screen_h)
         {
@@ -610,7 +602,9 @@ void __stdcall WinMainCRTStartup()
         };
         
         renderer_command *cmd = draw(&in);
+        
         u32 cell_count = cmd->code_view.num_cells_x * cmd->code_view.num_cells_y;
+
         if(cell_buffer_count < cell_count)
         {
             if(cell_buffer)
@@ -677,7 +671,6 @@ void __stdcall WinMainCRTStartup()
         PROFILE_END();
 
         frame_count++;
-        arena_reset(frame_arena);
 
         PROFILE_END();
     }

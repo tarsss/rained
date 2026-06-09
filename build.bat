@@ -24,7 +24,7 @@ IF "%1" == "release" (
     set compiler_flags=%common_compiler_flags% %debug_compiler_flags%
     set linker_flags=%common_linker_flags% %debug_linker_flags%
 )
-clang-cl editor.c %compiler_flags% -link %linker_flags% -verbose:ref -force:unresolved
+clang-cl rained_win32.c -o rained.exe %compiler_flags% -link %linker_flags% -verbose:ref -force:unresolved 
 
 call C:\raddbg\raddbg --ipc run
 ::call editor

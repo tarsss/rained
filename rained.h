@@ -1,0 +1,285 @@
+#define STB_SPRINTF_IMPLEMENTATION
+#include "stb_sprintf.h"
+#include <stdint.h>
+
+#ifdef ASAN_ENABLED
+    void __asan_poison_memory_region(void const volatile *addr, size_t size);
+    void __asan_unpoison_memory_region(void const volatile *addr, size_t size);
+    #define ASAN_POISON_REGION(addr, size) __asan_poison_memory_region(addr, size);
+    #define ASAN_UNPOISON_REGION(addr, size) __asan_unpoison_memory_region(addr, size);
+#else
+    #define ASAN_POISON_REGION(addr, size)
+    #define ASAN_UNPOISON_REGION(addr, size)
+#endif
+
+#define assert(a) if(!(a)) { *(volatile int*)0 = 0; }
+#define assert_hr(a) assert(SUCCEEDED(a))
+#define alignof(n) (_Alignof(n))
+#define lengthof(arr) (sizeof(arr) / sizeof(arr[0]))
+#define internal static
+#define global static
+
+typedef uint8_t     u8;
+typedef int8_t      i8;
+typedef uint16_t    u16;
+typedef int16_t     i16;
+typedef uint32_t    u32;
+typedef int32_t     i32;
+typedef uint64_t    u64;
+typedef int64_t     i64;
+typedef float       f32;
+typedef double      f64;
+typedef int8_t      b8;
+typedef int32_t     b32;
+
+#define kb(n) ((u64)n << 10)
+#define mb(n) ((u64)n << 20)
+#define gb(n) ((u64)n << 30)
+
+#define min(a,b) (a < b ? a : b)
+#define max(a,b) (a > b ? a : b)
+
+#define tb(n) ((u64)n << 40)
+
+#define PAGE_SIZE 4096
+
+#ifdef SPALL_ENABLED
+#include "spall.h"
+static SpallProfile spall_profile;
+static SpallBuffer spall_buffer;
+static HANDLE spall_file;
+internal void spall_begin(char *name)
+{
+    // cant you get the size of the string at compile time?
+    spall_buffer_begin(&spall_profile, &spall_buffer, name, cstring_length(name), os_time_us());
+}
+internal void spall_end()
+{
+    spall_buffer_end(&spall_profile, &spall_buffer, os_time_us());
+}
+SPALL_NOINSTRUMENT bool spall_callback_write(SpallProfile *sp, const void *data, size_t length)
+{
+    return WriteFile(spall_file, data, length, 0, 0);
+}
+SPALL_NOINSTRUMENT bool spall_callback_flush(SpallProfile *sp)
+{
+    return 1;
+}
+SPALL_NOINSTRUMENT void spall_callback_close(SpallProfile *sp)
+{
+    assert(CloseHandle(spall_file));
+}
+internal void spall_begin_profiling()
+{
+    spall_file = CreateFileA("profile.spall", 
+        GENERIC_WRITE | FILE_APPEND_DATA, 
+        FILE_SHARE_READ,
+        0,
+        CREATE_ALWAYS, 
+        FILE_ATTRIBUTE_NORMAL, 
+        0);
+
+    assert(spall_file);
+
+    spall_init_callbacks(1000, &spall_callback_write, &spall_callback_flush, &spall_callback_close, 0, &spall_profile);
+
+    u64 buffer_size = mb(1);
+    void *mem;
+    os_mem_reserve(buffer_size, &mem);
+    os_mem_commit(mem, buffer_size);
+    memset(mem, 'd', buffer_size);
+    spall_buffer = (SpallBuffer)
+    {
+        .length = buffer_size,
+        .data = mem
+    };
+    assert(spall_buffer_init(&spall_profile, &spall_buffer));
+}
+internal void spall_end_profiling()
+{
+    spall_buffer_quit(&spall_profile, &spall_buffer);
+    os_mem_free(spall_buffer.data);
+    spall_quit(&spall_profile);
+}
+#define PROFILE_BEGIN(name) spall_begin(name)
+#define PROFILE_END() spall_end();
+#else
+#define PROFILE_BEGIN(name)
+#define PROFILE_END()
+#endif
+
+typedef struct
+{
+    void    *base;
+    u64     reserved;
+    u64     commited;
+    u64     used;
+
+} arena, arena_t;
+
+#pragma pack(push, 1)
+typedef struct
+{
+    u16     FileType;        /* File type, always 4D42h ("BM") */
+	u32     FileSize;        /* Size of the file in bytes */
+	u16     Reserved1;       /* Always 0 */
+	u16     Reserved2;       /* Always 0 */
+	u32     BitmapOffset;    /* Starting position of image data in bytes */
+	u32     Size;            /* Size of this header in bytes */
+	u32     Width;           /* Image width in pixels */
+	u32     Height;          /* Image height in pixels */
+	u16     Planes;          /* Number of color planes */
+	u16     BitsPerPixel;    /* Number of bits per pixel */
+	u32     Compression;     /* Compression methods used */
+	u32     SizeOfBitmap;    /* Size of bitmap in bytes */
+} bitmap_header;
+#pragma pack(pop)
+
+typedef struct
+{
+    bitmap_header   *header;
+    void            *data;
+
+} loaded_bitmap;
+
+typedef enum INPUT_EVENT
+{
+    INPUT_EVENT_ERROR = 0,
+    INPUT_EVENT_KEY,
+    INPUT_EVENT_TEXT,
+
+} INPUT_EVENT;
+
+typedef enum KEY_MODIFIER
+{
+    MODIFIER_SHIFT = 256,
+    MODIFIER_CTRL  = 512,
+    MODIFIER_ALT   = 1024,
+
+} KEY_MODIFIER;
+
+typedef enum KEY_CODE
+{
+    KEY_F1 = 0xFF,
+    KEY_F2,
+    KEY_F3,
+    KEY_F4,
+    KEY_F5,
+    KEY_F6,
+    KEY_F7,
+    KEY_F8,
+    KEY_F9,
+    KEY_F10,
+    KEY_F11,
+    KEY_F12,
+    KEY_THE_ONE_RIGHT_BELOW_ESCAPE,
+    KEY_UP,
+    KEY_DOWN,
+    KEY_RIGHT,
+    KEY_LEFT,
+
+} KEY_CODE;
+
+typedef struct
+{
+    INPUT_EVENT     type;
+    union
+    {
+        struct
+        {
+            u16     code;
+            b8      is_repeat;
+            b8      is_down;
+        };
+        char        character;
+    };
+
+} input_event;
+
+typedef struct
+{
+    u32 atlas_index;
+    u32 text_color;
+    u32 bg_color;
+
+} cell;
+
+typedef struct
+{
+    u32 line_in_text;
+    u32 pos_in_text;
+    u32 length;
+
+} chopped_line;
+
+
+typedef struct
+{
+    u32 position;
+    u32 wish_column;
+    
+} caret;
+
+typedef enum
+{
+    TEXT_EDIT_INSERT,
+    TEXT_EDIT_DELETE,
+
+} text_edit_kind;
+
+typedef struct
+{
+    u32     *lengths;
+
+} text_edit_delete;
+
+typedef struct
+{
+    char    *p;
+    u32     length;
+
+} string;
+
+typedef struct
+{
+    string  *strings;
+
+} text_edit_insert;
+
+typedef struct
+{
+    input_event *input_queue;
+    u32         input_queue_count;
+    i32         mouse_x, mouse_y;
+    f32         mouse_wheel_delta;
+    u32         screen_w, screen_h;
+    u64         frame_start;
+
+} rained_input;
+
+typedef struct
+{
+    struct
+    {
+        cell *cells;
+        u32 cell_width;
+        u32 cell_height;
+        u32 num_cells_x;
+        u32 num_cells_y;
+        u32 atlas_width_characters_x;
+        u32 atlas_height_characters_y;
+        i32 view_offset_pixels;
+        u32 vsync_line_position;
+        i32 pointer_x;
+        i32 pointer_y;
+
+    } code_view;
+
+} renderer_command;
+
+internal void os_mem_reserve(u64 size, void **address);
+internal void os_mem_commit(void *reserved, u64 size);
+internal void os_mem_free(void *base);
+internal u64 os_time_us();
+internal void *os_read_file(char *path, u32 *out_size, arena_t *arena);
+internal void os_toggle_fullscreen();

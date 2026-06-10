@@ -160,23 +160,23 @@ typedef enum KEY_MODIFIER
 
 typedef enum KEY_CODE
 {
-    KEY_F1 = 0xFF,
-    KEY_F2,
-    KEY_F3,
-    KEY_F4,
-    KEY_F5,
-    KEY_F6,
-    KEY_F7,
-    KEY_F8,
-    KEY_F9,
-    KEY_F10,
-    KEY_F11,
-    KEY_F12,
-    KEY_THE_ONE_RIGHT_BELOW_ESCAPE,
-    KEY_UP,
-    KEY_DOWN,
-    KEY_RIGHT,
-    KEY_LEFT,
+    KEY_F1 = 0x70,
+    KEY_F2 = 0x71,
+    KEY_F3 = 0x72,
+    KEY_F4 = 0x73,
+    KEY_F5 = 0x74,
+    KEY_F6 = 0x75,
+    KEY_F7 = 0x76,
+    KEY_F8 = 0x77,
+    KEY_F9 = 0x78,
+    KEY_F10 = 0x79,
+    KEY_F11 = 0x7A,
+    KEY_F12 = 0x7B,
+    KEY_THE_ONE_RIGHT_BELOW_ESCAPE = 0xC0,
+    KEY_LEFT = 0x25,
+    KEY_UP = 0x26,
+    KEY_RIGHT = 0x27,
+    KEY_DOWN = 0x28,
 
 } KEY_CODE;
 
@@ -206,7 +206,7 @@ typedef struct
 
 typedef struct
 {
-    u32 line_in_text;
+    u32 line_index;
     u32 pos_in_text;
     u32 length;
 

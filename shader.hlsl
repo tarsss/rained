@@ -31,18 +31,17 @@ uint get_cell_index(int2 pos)
     return cell_pos.x + cell_pos.y * num_cells_x;
 }
 
-float3 unpack_color(uint rgba)
+float3 unpack_color(int rgba)
 {
-    float r = (rgba & 0x000000FF) / 256.0f;
-    float g = (rgba & 0x0000FF00 >> 8) / 256.0f;
-    float b = (rgba & 0x00FF0000 >> 16) / 256.0f;
-    return float3(r,g,b);
+    float r = (rgba & 0x000000FF);
+    float g = (rgba & 0x0000FF00) >> 8;
+    float b = (rgba & 0x00FF0000) >> 16;
+    return float3(r,g,b) / 255.0f;
 }
 
 [numthreads(8,8,1)]
 void shader_cs(uint2 pixel_pos : SV_DispatchThreadID)
 {
-
     // draw a debug vertical line thingy to see tears better.
 #if 0
     if(pixel_pos.x > vsync_line_position && pixel_pos.x < vsync_line_position + 2)

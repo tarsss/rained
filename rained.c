@@ -11,7 +11,8 @@ struct undo_buffer_entry
     undo_buffer_entry   *prev;
 };
 
-typedef struct
+typedef struct rained_buffer rained_buffer;
+struct rained_buffer
 {
     arena               *text_arena;
     char                *text;
@@ -19,10 +20,11 @@ typedef struct
     arena               *undo_buffer_arena;
     undo_buffer_entry   *undo_buffer_tail;
     undo_buffer_entry   *undo_buffer_position;
+    rained_buffer       *next;
+};
 
-} rained_buffer;
-
-typedef struct
+typedef struct rained_view rained_view;
+struct rained_view
 {
     rained_buffer       *buffer;
     u32                 line_index;
@@ -31,14 +33,16 @@ typedef struct
     u32                 num_carets;
     u64                 caret_last_move_time;
     u32                 width_cells, height_cells;
-
-} rained_view;
+    rained_view         *next;
+};
 
 typedef struct
 {
     arena               *frame_arena;
     arena               *forever_arena;
-    rained_view         *view;
+    renderer_command    *commands;
+    rained_view         *views;
+    rained_buffer       *buffers;
 
 } rained_state;
 
@@ -157,6 +161,8 @@ internal void arena_release(arena *arena)
 #define arena_push_struct_noalign(a, s) (arena_push_noalign(a, sizeof(s)))
 #define arena_push_struct_zero(a, s) (memset(arena_push(a, sizeof(s), 8), 0, sizeof(s)))
 #define arena_copy(a, p, s) (memcpy(arena_push(a, s, 8), p, s))
+
+#define sll_push(sll, e) if(sll) { e->next = sll; } sll = e;
 
 internal loaded_bitmap load_bitmap(char *path, arena_t *arena)
 {
@@ -601,11 +607,11 @@ internal void redo(rained_view *view)
     }
 }
 
-internal void debug_open_test_buffer_and_view(rained_state *state)
+internal rained_buffer *open_buffer_from_file(rained_state *state, char *filename)
 {
     arena *text_arena = arena_alloc(gb(1), mb(1));
     u32 file_size = 0;
-    char *text = os_read_file("test.txt", &file_size, text_arena);
+    char *text = os_read_file(filename, &file_size, text_arena);
     rained_buffer *buffer = arena_push_struct_zero(state->forever_arena, rained_buffer);
     *buffer = (rained_buffer)
     {
@@ -614,12 +620,20 @@ internal void debug_open_test_buffer_and_view(rained_state *state)
         .text_size = file_size,
         .undo_buffer_arena = arena_alloc(gb(1), mb(1)),
     };
-    state->view = arena_push_struct_zero(state->forever_arena, rained_view);
-    *state->view = (rained_view)
+    sll_push(state->buffers, buffer);
+    return buffer;
+}
+
+internal rained_view *create_view(rained_state *state, rained_buffer *buffer)
+{
+    rained_view *view = arena_push_struct_zero(state->forever_arena, rained_view);
+    *view = (rained_view)
     {
         .num_carets = 1,
         .buffer = buffer,
     };
+    sll_push(state->views, view);
+    return view;
 }
 
 typedef struct
@@ -671,6 +685,21 @@ internal chopped_line_list chop_lines(rained_view *view, u32 start, u32 num_to_c
     return res;
 }
 
+typedef struct
+{
+    renderer_command    *commands;
+    u32                 screen_w, screen_h;
+    rect                rect;
+
+} draw_context;
+
+internal void push_renderer_command(draw_context *ctx, renderer_command cmd)
+{
+    renderer_command *p = arena_push_struct(global_state.frame_arena, renderer_command);
+    *p = cmd;
+    sll_push(ctx->commands, p);
+}
+
 internal u32 find_line(rained_buffer *buffer, u32 line)
 {
     u32 cur_line = 0;
@@ -697,18 +726,134 @@ internal u32 find_line(rained_buffer *buffer, u32 line)
     return line_start;
 }
 
+internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount)
+{
+    u32 cell_width = 8;
+    u32 cell_height = 18;
+
+    view->width_cells = (ctx->rect.max_x - ctx->rect.min_x + cell_width - 1) / cell_width;
+    view->height_cells = (ctx->rect.max_y - ctx->rect.min_y + cell_height - 1) / cell_height + 1;
+
+    view->view_offset_pixels -= scroll_amount;
+    
+    while(view->view_offset_pixels < 0 && view->line_index)
+    {
+        view->line_index--;
+        chopped_line_list l = chop_lines(view, find_line(view->buffer, view->line_index), -1, 1, global_state.frame_arena);
+        view->view_offset_pixels = cell_height * l.count + view->view_offset_pixels;
+    }
+
+    while(1)
+    {
+        chopped_line_list l = chop_lines(view, find_line(view->buffer, view->line_index), -1, 1, global_state.frame_arena);
+        
+        if(view->view_offset_pixels / cell_height > l.count && l.count)
+        {   
+            view->line_index++;
+            view->view_offset_pixels -= cell_height * l.count;
+        }
+        else
+        {
+            break;
+        }
+    }
+
+    u32 text_color = 0x009F9F9F;
+    u32 bg_color = 0x00000000;
+    u32 caret_line_color = 0x001F1F1F;
+
+    u32 cell_count = view->width_cells * view->height_cells; 
+    cell *cells = arena_push(global_state.frame_arena, cell_count * sizeof(cell), 64);
+
+    for(u32 i = 0; i < cell_count; i++)
+    {
+        cells[i] = (cell) 
+        {
+            .bg_color = bg_color
+        };
+    }
+
+    i32 offset_lines = max(0, view->view_offset_pixels / cell_height);
+
+    chopped_line_list chopped = chop_lines(view, find_line(view->buffer, view->line_index), view->height_cells + offset_lines, -1, global_state.frame_arena);
+
+    for(u32 y = 0; y < min(view->height_cells, chopped.count); y++)
+    {
+        chopped_line *l = &chopped.lines[offset_lines + y];
+
+        for(u32 j = 0; j < min(l->length, view->width_cells); j++)
+        {
+            char c = view->buffer->text[l->pos_in_text + j];
+            u32 cell_index = j + y * view->width_cells;
+
+            cells[cell_index] = (cell) 
+            { 
+                .atlas_index = c - 33,
+                .text_color = text_color,
+                .bg_color = bg_color,
+            };
+        }
+
+        for(u32 k = 0; k < view->num_carets; k++)
+        {
+            caret *caret = &view->carets[k];
+            if(caret->position >= l->pos_in_text && caret->position < l->pos_in_text + l->length)
+            {
+                for(u32 j = 0; j < view->width_cells; j++)
+                {
+                    cells[y * view->width_cells + j].bg_color = caret_line_color;
+                }
+            }
+        }
+
+        for(u32 k = 0; k < view->num_carets; k++)
+        {
+            caret *caret = &view->carets[k];
+            if(caret->position >= l->pos_in_text && caret->position < l->pos_in_text + l->length)          
+            {      
+                cell *c = &cells[caret->position - l->pos_in_text + y * view->width_cells];
+                c->bg_color = ~c->bg_color;
+                c->text_color = ~c->text_color;
+            }
+        }
+
+    }
+
+    push_renderer_command(ctx, (renderer_command)
+    {
+        .code_view = 
+        {
+            .rect = ctx->rect,
+            .cells = cells,
+            .cell_width = cell_width,
+            .cell_height = cell_height,
+            .num_cells_x = view->width_cells,
+            .num_cells_y = view->height_cells,
+            .atlas_width_characters_x = 14,
+            .atlas_height_characters_y = 7,
+            .view_offset_pixels = view->view_offset_pixels < 0.0f ? view->view_offset_pixels : (i32)view->view_offset_pixels % cell_height,
+            .vsync_line_position = os_time_us() / 1000 % ctx->screen_w,
+        }
+    });
+}
+
 internal renderer_command *draw(rained_input *input)
 {
-    if(!global_state.view)
+    static b32 did_init;
+    if(!did_init)
     {
         global_state.forever_arena = arena_alloc(gb(1), mb(1));
         global_state.frame_arena = arena_alloc(gb(1), mb(1));
-        debug_open_test_buffer_and_view(&global_state);
-    }
+        did_init = 1;   
 
+        rained_buffer *b0 = open_buffer_from_file(&global_state, "test.txt");
+        rained_buffer *b1 = open_buffer_from_file(&global_state, "rained.c");
+        rained_view *v0 = create_view(&global_state, b0);
+        rained_view *v1 = create_view(&global_state, b1);
+    }
     arena_reset(global_state.frame_arena);
     
-    rained_view *view = global_state.view;
+    rained_view *view = global_state.views;
 
     for(u32 i = 0; i < input->input_queue_count; i++)
     {
@@ -829,129 +974,24 @@ internal renderer_command *draw(rained_input *input)
         merge_overlapping_carets_in_a_slow_way(view);
     }
 
-    ////////////////////////////////////////////////////////////////////////////////
-    ////////////////////////////////////////////////////////////////////////////////
-
-    u32 cell_width = 8;
-    u32 cell_height = 18;
-
-    view->width_cells = (input->screen_w + cell_width - 1) / cell_width;
-    view->height_cells = (input->screen_h + cell_height - 1) / cell_height + 1;
-
-    view->view_offset_pixels -= input->mouse_wheel_delta;
-    
-    while(view->view_offset_pixels < 0 && view->line_index)
+    draw_context ctx = 
     {
-        view->line_index--;
-        chopped_line_list l = chop_lines(view, find_line(view->buffer, view->line_index), -1, 1, global_state.frame_arena);
-        view->view_offset_pixels = cell_height * l.count + view->view_offset_pixels;
-    }
-
-    while(1)
-    {
-        chopped_line_list l = chop_lines(view, find_line(view->buffer, view->line_index), -1, 1, global_state.frame_arena);
-        
-        if(view->view_offset_pixels / cell_height > l.count)
-        {   
-            view->line_index++;
-            view->view_offset_pixels -= cell_height * l.count;
-        }
-        else
-        {
-            break;
-        }
-    }
-
-    b32 caret_blink = 0;
-    u32 caret_period = 1000 * 1000;
-    if((input->frame_start - view->caret_last_move_time) % caret_period > caret_period / 2)
-    {
-        caret_blink = 1;
-    }
-
-    u32 text_color = 0x009F9F9F;
-    u32 bg_color = 0x00000000;
-    u32 caret_line_color = 0x001F1F1F;
-
-    u32 cell_count = view->width_cells * view->height_cells; 
-    cell *cells = arena_push(global_state.frame_arena, cell_count * sizeof(cell), 64);
-
-    for(u32 i = 0; i < cell_count; i++)
-    {
-        cells[i] = (cell) 
-        {
-            .bg_color = bg_color
-        };
-    }
-
-    i32 offset_lines = max(0, view->view_offset_pixels / cell_height);
-
-    chopped_line_list chopped = chop_lines(view, find_line(view->buffer, view->line_index), view->height_cells + offset_lines, -1, global_state.frame_arena);
-
-    for(u32 y = 0; y < view->height_cells; y++)
-    {
-        chopped_line *l = &chopped.lines[offset_lines + y];
-
-        for(u32 j = 0; j < min(l->length, view->width_cells); j++)
-        {
-            char c = view->buffer->text[l->pos_in_text + j];
-            u32 cell_index = j + y * view->width_cells;
-
-            cells[cell_index] = (cell) 
-            { 
-                .atlas_index = c - 33,
-                .text_color = text_color,
-                .bg_color = bg_color,
-            };
-        }
-
-        for(u32 k = 0; k < view->num_carets; k++)
-        {
-            caret *caret = &view->carets[k];
-            if(caret->position >= l->pos_in_text && caret->position < l->pos_in_text + l->length)
-            {
-                for(u32 j = 0; j < view->width_cells; j++)
-                {
-                    cells[y * view->width_cells + j].bg_color = caret_line_color;
-                }
-            }
-        }
-
-        for(u32 k = 0; k < view->num_carets; k++)
-        {
-            caret *caret = &view->carets[k];
-            if(caret->position >= l->pos_in_text && caret->position < l->pos_in_text + l->length)          
-            {      
-                if(!caret_blink)
-                {
-                    cell *c = &cells[caret->position - l->pos_in_text + y * view->width_cells];
-                    c->bg_color = ~c->bg_color;
-                    c->text_color = ~c->text_color;
-                }
-            }
-        }
-
-    }
-
-    u32 view_offset_cell = view->view_offset_pixels < 0.0f ? view->view_offset_pixels : (i32)view->view_offset_pixels % cell_height;
-
-    renderer_command *cmd = arena_push_struct(global_state.frame_arena, renderer_command);
-    *cmd = (renderer_command)
-    {
-        .code_view = 
-        {
-            .cells = cells,
-            .cell_width = cell_width,
-            .cell_height = cell_height,
-            .num_cells_x = view->width_cells,
-            .num_cells_y = view->height_cells,
-            .atlas_width_characters_x = 14,
-            .atlas_height_characters_y = 7,
-            .view_offset_pixels = view_offset_cell,
-            .vsync_line_position = os_time_us() / 1000 % input->screen_w,
-            .pointer_x = input->mouse_x,
-            .pointer_y = input->mouse_y
-        }
+        .screen_w = input->screen_w,  
+        .screen_h = input->screen_h
     };
-    return cmd;
+    ctx.rect = (rect)
+    {
+        .max_x = input->screen_w / 2,
+        .max_y = input->screen_h
+    };
+    draw_view(&ctx, view, input->mouse_wheel_delta);
+    ctx.rect = (rect)
+    {
+        .min_x = input->screen_w / 2,
+        .max_x = input->screen_w,
+        .max_y = input->screen_h
+    };
+    draw_view(&ctx, view->next, input->mouse_wheel_delta);
+
+    return ctx.commands;
 }

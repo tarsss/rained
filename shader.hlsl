@@ -12,6 +12,10 @@ StructuredBuffer<cell>  cells           : register(t1);
 
 cbuffer cb : register(b0)
 {
+    int rect_min_x;
+    int rect_min_y;
+    int rect_max_x;
+    int rect_max_y;
     uint cell_width;
     uint cell_height;
     uint num_cells_x;
@@ -40,8 +44,14 @@ float3 unpack_color(int rgba)
 }
 
 [numthreads(8,8,1)]
-void shader_cs(uint2 pixel_pos : SV_DispatchThreadID)
+void shader_cs(int2 pixel_pos : SV_DispatchThreadID)
 {
+    pixel_pos += int2(rect_min_x, rect_min_y);
+    if(pixel_pos.x < 0 || pixel_pos.y < 0 || pixel_pos.x >= rect_max_x || pixel_pos.y >= rect_max_y)
+    {
+        return;
+    }
+    
     // draw a debug vertical line thingy to see tears better.
 #if 0
     if(pixel_pos.x > vsync_line_position && pixel_pos.x < vsync_line_position + 2)

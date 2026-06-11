@@ -259,8 +259,17 @@ typedef struct
 
 typedef struct
 {
+    i32 min_x, min_y, max_x, max_y;
+} rect;
+
+typedef struct renderer_command renderer_command;
+struct renderer_command
+{
+    renderer_command    *next;
+    
     struct
     {
+        rect rect;
         cell *cells;
         u32 cell_width;
         u32 cell_height;
@@ -274,8 +283,7 @@ typedef struct
         i32 pointer_y;
 
     } code_view;
-
-} renderer_command;
+};
 
 internal void os_mem_reserve(u64 size, void **address);
 internal void os_mem_commit(void *reserved, u64 size);

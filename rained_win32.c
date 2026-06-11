@@ -341,7 +341,7 @@ void __stdcall WinMainCRTStartup()
     window = CreateWindowEx(
         WS_EX_APPWINDOW | WS_EX_NOREDIRECTIONBITMAP,
         windowClass.lpszClassName,
-        "editor",
+        "rained",
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
@@ -517,6 +517,10 @@ void __stdcall WinMainCRTStartup()
 
     typedef struct 
     {
+        i32 rect_min_x;
+        i32 rect_min_y;
+        i32 rect_max_x;
+        i32 rect_max_y;
         u32 cell_width;
         u32 cell_height;
         u32 num_cells_x;
@@ -602,57 +606,69 @@ void __stdcall WinMainCRTStartup()
         };
         
         renderer_command *cmd = draw(&in);
-        
-        u32 cell_count = cmd->code_view.num_cells_x * cmd->code_view.num_cells_y;
-
-        if(cell_buffer_count < cell_count)
-        {
-            if(cell_buffer)
-            {
-                ID3D11Buffer_Release(cell_buffer);
-                ID3D11ShaderResourceView_Release(cell_buffer_srv);
-            }
-
-            D3D11_BUFFER_DESC cell_buffer_desc = 
-            {
-                .ByteWidth = cell_count * sizeof(cell),
-                .Usage = D3D11_USAGE_DYNAMIC,
-                .BindFlags = D3D11_BIND_SHADER_RESOURCE,
-                .CPUAccessFlags = D3D11_CPU_ACCESS_WRITE,
-                .MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED,
-                .StructureByteStride = sizeof(cell)
-            };
-            ID3D11Device_CreateBuffer(device, &cell_buffer_desc, 0, &cell_buffer);
-            D3D11_SHADER_RESOURCE_VIEW_DESC d = 
-            {
-                .Format = DXGI_FORMAT_UNKNOWN,
-                .ViewDimension = D3D11_SRV_DIMENSION_BUFFER,
-                .Buffer.NumElements = cell_count,
-            };
-            ID3D11Device_CreateShaderResourceView(device, (ID3D11Resource*)cell_buffer, &d, &cell_buffer_srv);
-            ID3D11DeviceContext_CSSetShaderResources(device_context, 1, 1, &cell_buffer_srv);
-            cell_buffer_count = cell_count;
-        }
-
-        cbuffer_t cb = 
-        {
-            .cell_width = cmd->code_view.cell_width,
-            .cell_height = cmd->code_view.cell_height,
-            .num_cells_x = cmd->code_view.num_cells_x,
-            .num_cells_y = cmd->code_view.num_cells_y,
-            .atlas_width_characters_x = cmd->code_view.atlas_width_characters_x,
-            .atlas_height_characters_y = cmd->code_view.atlas_height_characters_y,
-            .view_offset_pixels = cmd->code_view.view_offset_pixels,
-            .vsync_line_position = cmd->code_view.vsync_line_position,
-            .pointer_x = cmd->code_view.pointer_x,
-            .pointer_y = cmd->code_view.pointer_y,
-        };
-
         PROFILE_BEGIN("draw");
-        d3d11_write_buffer((ID3D11Resource*)cell_buffer, cmd->code_view.cells, cell_count * sizeof(cell));
-        d3d11_write_buffer((ID3D11Resource*)d3d11_cbuffer, &cb, sizeof(cbuffer_t));
 
-        ID3D11DeviceContext_Dispatch(device_context, (screen_w + 8 - 1) / 8, (screen_h + 8 - 1) / 8, 1);
+        // todo removeme
+        f32 clear_color[4] = { 1,0,1,1 }; 
+        ID3D11DeviceContext_ClearRenderTargetView(device_context, rt_view, clear_color);
+
+        while(cmd)
+        {
+            u32 cell_count = cmd->code_view.num_cells_x * cmd->code_view.num_cells_y;
+    
+            if(cell_buffer_count < cell_count)
+            {
+                if(cell_buffer)
+                {
+                    ID3D11Buffer_Release(cell_buffer);
+                    ID3D11ShaderResourceView_Release(cell_buffer_srv);
+                }
+    
+                D3D11_BUFFER_DESC cell_buffer_desc = 
+                {
+                    .ByteWidth = cell_count * sizeof(cell),
+                    .Usage = D3D11_USAGE_DYNAMIC,
+                    .BindFlags = D3D11_BIND_SHADER_RESOURCE,
+                    .CPUAccessFlags = D3D11_CPU_ACCESS_WRITE,
+                    .MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED,
+                    .StructureByteStride = sizeof(cell)
+                };
+                ID3D11Device_CreateBuffer(device, &cell_buffer_desc, 0, &cell_buffer);
+                D3D11_SHADER_RESOURCE_VIEW_DESC d = 
+                {
+                    .Format = DXGI_FORMAT_UNKNOWN,
+                    .ViewDimension = D3D11_SRV_DIMENSION_BUFFER,
+                    .Buffer.NumElements = cell_count,
+                };
+                ID3D11Device_CreateShaderResourceView(device, (ID3D11Resource*)cell_buffer, &d, &cell_buffer_srv);
+                ID3D11DeviceContext_CSSetShaderResources(device_context, 1, 1, &cell_buffer_srv);
+                cell_buffer_count = cell_count;
+            }
+    
+            cbuffer_t cb = 
+            {
+                .rect_min_x = cmd->code_view.rect.min_x,
+                .rect_min_y = cmd->code_view.rect.min_y,
+                .rect_max_x = cmd->code_view.rect.max_x,
+                .rect_max_y = cmd->code_view.rect.max_y,
+                .cell_width = cmd->code_view.cell_width,
+                .cell_height = cmd->code_view.cell_height,
+                .num_cells_x = cmd->code_view.num_cells_x,
+                .num_cells_y = cmd->code_view.num_cells_y,
+                .atlas_width_characters_x = cmd->code_view.atlas_width_characters_x,
+                .atlas_height_characters_y = cmd->code_view.atlas_height_characters_y,
+                .view_offset_pixels = cmd->code_view.view_offset_pixels,
+                .vsync_line_position = cmd->code_view.vsync_line_position,
+                .pointer_x = cmd->code_view.pointer_x,
+                .pointer_y = cmd->code_view.pointer_y,
+            };
+    
+            d3d11_write_buffer((ID3D11Resource*)cell_buffer, cmd->code_view.cells, cell_count * sizeof(cell));
+            d3d11_write_buffer((ID3D11Resource*)d3d11_cbuffer, &cb, sizeof(cbuffer_t));
+    
+            ID3D11DeviceContext_Dispatch(device_context, (cmd->code_view.rect.max_x - cmd->code_view.rect.min_x + 8 - 1) / 8, (cmd->code_view.rect.max_y - cmd->code_view.rect.min_y + 8 - 1) / 8, 1);
+            cmd = cmd->next;
+        }
         PROFILE_END();
 
         ////////////////////////////////////////////////////////////////////////////////

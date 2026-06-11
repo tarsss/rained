@@ -24,7 +24,8 @@ cbuffer cb : register(b0)
     uint atlas_height_characters_y;
     int view_offset_pixels;
     uint vsync_line_position;
-    int pointer_x, pointer_y;
+    int pointer_x; 
+    int pointer_y;
 }
 
 #define rgb(a,b,c) (float3(a,b,c) / 255.0f)
@@ -44,9 +45,9 @@ float3 unpack_color(int rgba)
 }
 
 [numthreads(8,8,1)]
-void shader_cs(int2 pixel_pos : SV_DispatchThreadID)
+void shader_cs(int2 thread_id : SV_DispatchThreadID)
 {
-    pixel_pos += int2(rect_min_x, rect_min_y);
+    int2 pixel_pos = thread_id + int2(rect_min_x, rect_min_y);
     if(pixel_pos.x < 0 || pixel_pos.y < 0 || pixel_pos.x >= rect_max_x || pixel_pos.y >= rect_max_y)
     {
         return;
@@ -72,7 +73,7 @@ void shader_cs(int2 pixel_pos : SV_DispatchThreadID)
     }
 #endif
 
-    uint2 offset_pixel_pos = pixel_pos;
+    uint2 offset_pixel_pos = thread_id;
     offset_pixel_pos.y += view_offset_pixels;
     
     // todo: once we do proper atlas generation, there will be 1:1 match in pixel/texel sizes and you won't have to remap, simple integer math instead

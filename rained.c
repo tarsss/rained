@@ -628,7 +628,7 @@ typedef struct
     u32             count;
 } chopped_line_list;
 
-internal chopped_line_list chop_lines(rained_view *view, u32 start, u32 num_to_chop, arena *arena)
+internal chopped_line_list chop_lines(rained_view *view, u32 start, u32 num_to_chop, u32 num_lines, arena *arena)
 {
     chopped_line_list res = 
     {
@@ -638,7 +638,7 @@ internal chopped_line_list chop_lines(rained_view *view, u32 start, u32 num_to_c
     u32 pos = start;
     u32 line_start = start;
     u32 line = 0;
-    while(pos < view->buffer->text_size && res.count < num_to_chop)
+    while(pos < view->buffer->text_size && res.count < num_to_chop && line < num_lines)
     {
         char c = view->buffer->text[pos];
         if(c == '\n')
@@ -670,48 +670,6 @@ internal chopped_line_list chop_lines(rained_view *view, u32 start, u32 num_to_c
     }
     return res;
 }
-
-internal chopped_line_list chop_line(rained_view *view, u32 start, arena *arena)
-{
-    chopped_line_list res = 
-    {
-        .lines = arena_push(arena, 0, 64),
-        .count = 0
-    };
-    u32 pos = start;
-    u32 line_start = start;
-
-    while(pos < view->buffer->text_size)
-    {
-        char c = view->buffer->text[pos];
-        if(c == '\n')
-        {
-            chopped_line *l = arena_push_struct_noalign(arena, chopped_line);
-            *l = (chopped_line)
-            {
-                .pos_in_text = line_start,
-                .length = pos - line_start,
-            };
-            line_start = pos + 1;
-            res.count++;
-            return res;
-        }
-        else if(pos - line_start >= view->width_cells - 1 && c > 31)
-        {
-            chopped_line *l = arena_push_struct_noalign(arena, chopped_line);
-            *l = (chopped_line)
-            {
-                .pos_in_text = line_start,
-                .length = pos - line_start,
-            };
-            line_start = pos;
-            res.count++;
-        }
-        pos++;
-    }
-    return res;
-}
-
 
 internal u32 find_line(rained_buffer *buffer, u32 line)
 {
@@ -879,22 +837,30 @@ internal renderer_command *draw(rained_input *input)
 
     view->width_cells = (input->screen_w + cell_width - 1) / cell_width;
     view->height_cells = (input->screen_h + cell_height - 1) / cell_height + 1;
-    u32 cell_count = view->width_cells * view->height_cells; 
-
-    cell *cells = arena_push(global_state.frame_arena, cell_count * sizeof(cell), 64);
-    memset(cells, 0, cell_count * sizeof(cell));
 
     view->view_offset_pixels -= input->mouse_wheel_delta;
-    u32 offset_lines = view->view_offset_pixels / cell_height;
-
-    chopped_line_list l = chop_line(view, find_line(view->buffer, view->line_index), global_state.frame_arena);
-    if(offset_lines > l.count)
+    
+    while(view->view_offset_pixels < 0 && view->line_index)
     {
-        view->line_index++;
-        view->view_offset_pixels -= cell_height * l.count;
+        view->line_index--;
+        chopped_line_list l = chop_lines(view, find_line(view->buffer, view->line_index), -1, 1, global_state.frame_arena);
+        view->view_offset_pixels = cell_height * l.count + view->view_offset_pixels;
     }
 
-    chopped_line_list chopped = chop_lines(view, find_line(view->buffer, view->line_index), view->height_cells, global_state.frame_arena);
+    while(1)
+    {
+        chopped_line_list l = chop_lines(view, find_line(view->buffer, view->line_index), -1, 1, global_state.frame_arena);
+        
+        if(view->view_offset_pixels / cell_height > l.count)
+        {   
+            view->line_index++;
+            view->view_offset_pixels -= cell_height * l.count;
+        }
+        else
+        {
+            break;
+        }
+    }
 
     b32 caret_blink = 0;
     u32 caret_period = 1000 * 1000;
@@ -907,6 +873,9 @@ internal renderer_command *draw(rained_input *input)
     u32 bg_color = 0x00000000;
     u32 caret_line_color = 0x001F1F1F;
 
+    u32 cell_count = view->width_cells * view->height_cells; 
+    cell *cells = arena_push(global_state.frame_arena, cell_count * sizeof(cell), 64);
+
     for(u32 i = 0; i < cell_count; i++)
     {
         cells[i] = (cell) 
@@ -915,14 +884,13 @@ internal renderer_command *draw(rained_input *input)
         };
     }
 
+    i32 offset_lines = max(0, view->view_offset_pixels / cell_height);
+
+    chopped_line_list chopped = chop_lines(view, find_line(view->buffer, view->line_index), view->height_cells + offset_lines, -1, global_state.frame_arena);
+
     for(u32 y = 0; y < view->height_cells; y++)
     {
-        u32 ind = offset_lines + y;
-        if(ind >= chopped.count)
-        {
-            break;
-        }
-        chopped_line *l = &chopped.lines[ind];
+        chopped_line *l = &chopped.lines[offset_lines + y];
 
         for(u32 j = 0; j < min(l->length, view->width_cells); j++)
         {

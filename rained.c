@@ -36,13 +36,23 @@ struct rained_view
     rained_view         *next;
 };
 
+typedef struct rained_tile rained_tile;
+struct rained_tile
+{
+    rect                rect;
+    rained_view         *view;
+    rained_view         *views;
+};
+
 typedef struct
 {
     arena               *frame_arena;
     arena               *forever_arena;
     renderer_command    *commands;
-    rained_view         *views;
     rained_buffer       *buffers;
+    rained_tile         *tile_left;
+    rained_tile         *tile_right;
+    rained_tile         *focused_tile;
 
 } rained_state;
 
@@ -624,15 +634,16 @@ internal rained_buffer *open_buffer_from_file(rained_state *state, char *filenam
     return buffer;
 }
 
-internal rained_view *create_view(rained_state *state, rained_buffer *buffer)
+internal rained_view *create_view(rained_tile *tile, rained_buffer *buffer)
 {
-    rained_view *view = arena_push_struct_zero(state->forever_arena, rained_view);
+    rained_view *view = arena_push_struct_zero(global_state.forever_arena, rained_view);
     *view = (rained_view)
     {
         .num_carets = 1,
         .buffer = buffer,
     };
-    sll_push(state->views, view);
+    sll_push(tile->views, view);
+    tile->view = view;
     return view;
 }
 
@@ -642,7 +653,7 @@ typedef struct
     u32             count;
 } chopped_line_list;
 
-internal chopped_line_list chop_lines(rained_view *view, u32 start, u32 num_to_chop, u32 num_lines, arena *arena)
+internal chopped_line_list chop_lines(rained_buffer *buffer, u32 width_cells, u32 start, u32 num_to_chop, u32 num_lines, arena *arena)
 {
     chopped_line_list res = 
     {
@@ -652,9 +663,9 @@ internal chopped_line_list chop_lines(rained_view *view, u32 start, u32 num_to_c
     u32 pos = start;
     u32 line_start = start;
     u32 line = 0;
-    while(pos < view->buffer->text_size && res.count < num_to_chop && line < num_lines)
+    while(pos < buffer->text_size && res.count < num_to_chop && line < num_lines)
     {
-        char c = view->buffer->text[pos];
+        char c = buffer->text[pos];
         if(c == '\n')
         {
             chopped_line *l = arena_push_struct_noalign(arena, chopped_line);
@@ -668,7 +679,7 @@ internal chopped_line_list chop_lines(rained_view *view, u32 start, u32 num_to_c
             res.count++;
             line++;
         }
-        else if(pos - line_start >= view->width_cells - 1 && c > 31)
+        else if(pos - line_start >= width_cells - 1 && c > 31)
         {
             chopped_line *l = arena_push_struct_noalign(arena, chopped_line);
             *l = (chopped_line)
@@ -726,26 +737,26 @@ internal u32 find_line(rained_buffer *buffer, u32 line)
     return line_start;
 }
 
-internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount)
+internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount, b32 is_focused)
 {
     u32 cell_width = 8;
     u32 cell_height = 18;
 
-    view->width_cells = (ctx->rect.max_x - ctx->rect.min_x + cell_width - 1) / cell_width;
-    view->height_cells = (ctx->rect.max_y - ctx->rect.min_y + cell_height - 1) / cell_height + 1;
+    u32 width_cells = (ctx->rect.max_x - ctx->rect.min_x + cell_width - 1) / cell_width;
+    u32 height_cells = (ctx->rect.max_y - ctx->rect.min_y + cell_height - 1) / cell_height + 1;
 
     view->view_offset_pixels -= scroll_amount;
     
     while(view->view_offset_pixels < 0 && view->line_index)
     {
         view->line_index--;
-        chopped_line_list l = chop_lines(view, find_line(view->buffer, view->line_index), -1, 1, global_state.frame_arena);
+        chopped_line_list l = chop_lines(view->buffer, width_cells, find_line(view->buffer, view->line_index), -1, 1, global_state.frame_arena);
         view->view_offset_pixels = cell_height * l.count + view->view_offset_pixels;
     }
 
     while(1)
     {
-        chopped_line_list l = chop_lines(view, find_line(view->buffer, view->line_index), -1, 1, global_state.frame_arena);
+        chopped_line_list l = chop_lines(view->buffer, width_cells, find_line(view->buffer, view->line_index), -1, 1, global_state.frame_arena);
         
         if(view->view_offset_pixels / cell_height > l.count && l.count)
         {   
@@ -762,7 +773,7 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount)
     u32 bg_color = 0x00000000;
     u32 caret_line_color = 0x001F1F1F;
 
-    u32 cell_count = view->width_cells * view->height_cells; 
+    u32 cell_count = width_cells * height_cells; 
     cell *cells = arena_push(global_state.frame_arena, cell_count * sizeof(cell), 64);
 
     for(u32 i = 0; i < cell_count; i++)
@@ -775,16 +786,16 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount)
 
     i32 offset_lines = max(0, view->view_offset_pixels / cell_height);
 
-    chopped_line_list chopped = chop_lines(view, find_line(view->buffer, view->line_index), view->height_cells + offset_lines, -1, global_state.frame_arena);
+    chopped_line_list chopped = chop_lines(view->buffer, width_cells, find_line(view->buffer, view->line_index), height_cells + offset_lines, -1, global_state.frame_arena);
 
-    for(u32 y = 0; y < min(view->height_cells, chopped.count); y++)
+    for(u32 y = 0; y < min(height_cells, chopped.count); y++)
     {
         chopped_line *l = &chopped.lines[offset_lines + y];
 
-        for(u32 j = 0; j < min(l->length, view->width_cells); j++)
+        for(u32 j = 0; j < min(l->length, width_cells); j++)
         {
             char c = view->buffer->text[l->pos_in_text + j];
-            u32 cell_index = j + y * view->width_cells;
+            u32 cell_index = j + y * width_cells;
 
             cells[cell_index] = (cell) 
             { 
@@ -799,24 +810,26 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount)
             caret *caret = &view->carets[k];
             if(caret->position >= l->pos_in_text && caret->position < l->pos_in_text + l->length)
             {
-                for(u32 j = 0; j < view->width_cells; j++)
+                for(u32 j = 0; j < width_cells; j++)
                 {
-                    cells[y * view->width_cells + j].bg_color = caret_line_color;
+                    cells[y * width_cells + j].bg_color = caret_line_color;
                 }
             }
         }
 
-        for(u32 k = 0; k < view->num_carets; k++)
+        if(is_focused)
         {
-            caret *caret = &view->carets[k];
-            if(caret->position >= l->pos_in_text && caret->position < l->pos_in_text + l->length)          
-            {      
-                cell *c = &cells[caret->position - l->pos_in_text + y * view->width_cells];
-                c->bg_color = ~c->bg_color;
-                c->text_color = ~c->text_color;
+            for(u32 k = 0; k < view->num_carets; k++)
+            {
+                caret *caret = &view->carets[k];
+                if(caret->position >= l->pos_in_text && caret->position < l->pos_in_text + l->length)          
+                {      
+                    cell *c = &cells[caret->position - l->pos_in_text + y * width_cells];
+                    c->bg_color = ~c->bg_color;
+                    c->text_color = ~c->text_color;
+                }
             }
         }
-
     }
 
     push_renderer_command(ctx, (renderer_command)
@@ -827,8 +840,8 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount)
             .cells = cells,
             .cell_width = cell_width,
             .cell_height = cell_height,
-            .num_cells_x = view->width_cells,
-            .num_cells_y = view->height_cells,
+            .num_cells_x = width_cells,
+            .num_cells_y = height_cells,
             .atlas_width_characters_x = 14,
             .atlas_height_characters_y = 7,
             .view_offset_pixels = view->view_offset_pixels < 0.0f ? view->view_offset_pixels : (i32)view->view_offset_pixels % cell_height,
@@ -837,23 +850,34 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount)
     });
 }
 
+internal void draw_tile(draw_context *ctx, rained_tile *tile, b32 is_focused, f32 scroll)
+{
+    if(tile->view)
+    {
+        ctx->rect = tile->rect;
+        draw_view(ctx, tile->view, scroll, is_focused);
+    }
+}
+
 internal renderer_command *draw(rained_input *input)
 {
     static b32 did_init;
     if(!did_init)
     {
+        did_init = 1;   
         global_state.forever_arena = arena_alloc(gb(1), mb(1));
         global_state.frame_arena = arena_alloc(gb(1), mb(1));
-        did_init = 1;   
-
+        global_state.tile_left = arena_push_struct_zero(global_state.forever_arena, rained_tile);
+        global_state.tile_right = arena_push_struct_zero(global_state.forever_arena, rained_tile);
+        global_state.focused_tile = global_state.tile_left;
         rained_buffer *b0 = open_buffer_from_file(&global_state, "test.txt");
         rained_buffer *b1 = open_buffer_from_file(&global_state, "rained.c");
-        rained_view *v0 = create_view(&global_state, b0);
-        rained_view *v1 = create_view(&global_state, b1);
+        rained_view *v0 = create_view(global_state.tile_left, b0);
+        rained_view *v1 = create_view(global_state.tile_right, b1);
     }
     arena_reset(global_state.frame_arena);
     
-    rained_view *view = global_state.views;
+    rained_view *view = global_state.focused_tile->view;
 
     for(u32 i = 0; i < input->input_queue_count; i++)
     {
@@ -891,6 +915,10 @@ internal renderer_command *draw(rained_input *input)
                 else if(e.code == ('Y' | MODIFIER_CTRL))
                 {
                     redo(view);
+                }
+                else if(e.code == (KEY_THE_ONE_TO_THE_LEFT_OF_A_RIGHT_SHIFT | MODIFIER_CTRL))
+                {
+                    global_state.focused_tile = global_state.focused_tile == global_state.tile_left ? global_state.tile_right : global_state.tile_left; 
                 }
             }
         }
@@ -974,24 +1002,33 @@ internal renderer_command *draw(rained_input *input)
         merge_overlapping_carets_in_a_slow_way(view);
     }
 
-    draw_context ctx = 
-    {
-        .screen_w = input->screen_w,  
-        .screen_h = input->screen_h
-    };
-    ctx.rect = (rect)
+    global_state.tile_left->rect = (rect)
     {
         .max_x = input->screen_w / 2,
         .max_y = input->screen_h
-    };
-    draw_view(&ctx, view, input->mouse_wheel_delta);
-    ctx.rect = (rect)
+    }; 
+
+    global_state.tile_right->rect = (rect)
     {
         .min_x = input->screen_w / 2,
         .max_x = input->screen_w,
-        .max_y = input->screen_h
+        .max_y = input->screen_h    
     };
-    draw_view(&ctx, view->next, input->mouse_wheel_delta);
+
+    draw_context ctx = 
+    {
+        .commands = global_state.commands,
+        .rect = (rect)
+        {
+            .max_x = input->screen_w,
+            .max_y = input->screen_h,
+        },
+        .screen_w = input->screen_w,
+        .screen_h = input->screen_h
+    };
+
+    draw_tile(&ctx, global_state.tile_left, global_state.tile_left == global_state.focused_tile, global_state.tile_left == global_state.focused_tile ? input->mouse_wheel_delta : 0.0f);
+    draw_tile(&ctx, global_state.tile_right, global_state.tile_right == global_state.focused_tile, global_state.tile_right == global_state.focused_tile ? input->mouse_wheel_delta : 0.0f);
 
     return ctx.commands;
 }

@@ -646,6 +646,7 @@ void __stdcall WinMainCRTStartup()
                     .MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED,
                     .StructureByteStride = sizeof(cell)
                 };
+
                 ID3D11Device_CreateBuffer(device, &cell_buffer_desc, 0, &cell_buffer);
                 D3D11_SHADER_RESOURCE_VIEW_DESC d = 
                 {

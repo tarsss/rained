@@ -961,6 +961,8 @@ internal void draw_tile(draw_context *ctx, rained_tile *tile, b32 is_focused, f3
     }
 }
 
+#include "rained_clang.c"
+
 internal renderer_command *draw(rained_input *input)
 {
     static b32 did_init;
@@ -976,6 +978,7 @@ internal renderer_command *draw(rained_input *input)
         rained_buffer *b1 = open_buffer_from_file(&global_state, "rained.c");
         rained_view *v0 = tile_push_view(global_state.tile_left, b0);
         rained_view *v1 = tile_push_view(global_state.tile_right, b1);
+        clang_test();
     }
     arena_reset(global_state.frame_arena);
     

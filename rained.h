@@ -1,3 +1,6 @@
+#ifndef RAINED_H
+#define RAINED_H
+
 #define STB_SPRINTF_IMPLEMENTATION
 #include "stb_sprintf.h"
 #include <stdint.h>
@@ -298,3 +301,5 @@ internal u64 os_time_us();
 internal void *os_read_file(char *path, u32 *out_size, arena_t *arena);
 internal void os_write_file(char *path, void *stuff, u64 size_bytes);
 internal void os_toggle_fullscreen();
+
+#endif

@@ -160,6 +160,11 @@ typedef enum KEY_MODIFIER
 
 typedef enum KEY_CODE
 {
+    KEY_ENTER = 0x0D,
+    KEY_LEFT = 0x25,
+    KEY_UP = 0x26,
+    KEY_RIGHT = 0x27,
+    KEY_DOWN = 0x28,
     KEY_F1 = 0x70,
     KEY_F2 = 0x71,
     KEY_F3 = 0x72,
@@ -172,16 +177,12 @@ typedef enum KEY_CODE
     KEY_F10 = 0x79,
     KEY_F11 = 0x7A,
     KEY_F12 = 0x7B,
-    KEY_THE_ONE_RIGHT_BELOW_ESCAPE = 0xC0,
     KEY_THE_ONE_TO_THE_LEFT_OF_A_RIGHT_SHIFT = 0xBF,
     KEY_PLUS = 0xBB,
     KEY_COMMA = 0xBC,
     KEY_MINUS = 0xBD,
     KEY_PERIOD = 0xBE,
-    KEY_LEFT = 0x25,
-    KEY_UP = 0x26,
-    KEY_RIGHT = 0x27,
-    KEY_DOWN = 0x28,
+    KEY_THE_ONE_RIGHT_BELOW_ESCAPE = 0xC0,
 
 } KEY_CODE;
 
@@ -295,4 +296,5 @@ internal void os_mem_commit(void *reserved, u64 size);
 internal void os_mem_free(void *base);
 internal u64 os_time_us();
 internal void *os_read_file(char *path, u32 *out_size, arena_t *arena);
+internal void os_write_file(char *path, void *stuff, u64 size_bytes);
 internal void os_toggle_fullscreen();

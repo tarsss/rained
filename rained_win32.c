@@ -117,6 +117,19 @@ internal void *os_read_file(char *path, u32 *out_size, arena_t *arena)
     return buffer;
 }
 
+internal void os_write_file(char *path, void *stuff, u64 size_bytes)
+{
+    HANDLE file = CreateFileA(path, 
+        GENERIC_WRITE, 
+        FILE_SHARE_READ,
+        0,
+        CREATE_ALWAYS, 
+        FILE_ATTRIBUTE_NORMAL, 
+        0);
+    WriteFile(file, stuff, size_bytes, 0, 0);
+    CloseHandle(file);
+}
+
 internal void os_toggle_fullscreen()
 {
     // https://devblogs.microsoft.com/oldnewthing/20100412-00/?p=14353

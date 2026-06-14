@@ -1,54 +1,6 @@
 #include "rained.h"
 
-typedef struct undo_buffer_entry undo_buffer_entry;
-struct undo_buffer_entry
-{
-    text_edit_kind      kind;
-    caret               *carets;
-    u32                 num_carets; 
-    string              *strings;
-    undo_buffer_entry   *next;
-    undo_buffer_entry   *prev;
-};
-
-typedef struct rained_buffer rained_buffer;
-struct rained_buffer
-{
-    string              path;
-    arena               *text_arena;
-    union
-    {
-        struct
-        {
-            char        *text;
-            u32         text_size;
-        };
-        string          text_string;
-    };
-    arena               *undo_buffer_arena;
-    undo_buffer_entry   *undo_buffer_tail;
-    undo_buffer_entry   *undo_buffer_position;
-    rained_buffer       *next;
-};
-
-typedef struct rained_view rained_view;
-struct rained_view
-{
-    rained_buffer       *buffer;
-    u32                 line_index;
-    f32                 y_offset_pixels;
-    caret               carets[1024];
-    u32                 num_carets;
-    rained_view         *next;
-    b32                 is_a_command_view; // note: mfgghhhhhhhh? idk.
-};
-
-typedef struct rained_tile rained_tile;
-struct rained_tile
-{
-    rect                rect;
-    rained_view         *view;
-};
+typedef struct rained_clang_state rained_clang_state;
 
 typedef struct
 {
@@ -59,6 +11,7 @@ typedef struct
     rained_tile         *tile_left;
     rained_tile         *tile_right;
     rained_tile         *focused_tile;
+    rained_clang_state  *clang_state;
 
 } rained_state;
 
@@ -978,7 +931,8 @@ internal renderer_command *draw(rained_input *input)
         rained_buffer *b1 = open_buffer_from_file(&global_state, "rained.c");
         rained_view *v0 = tile_push_view(global_state.tile_left, b0);
         rained_view *v1 = tile_push_view(global_state.tile_right, b1);
-        clang_test();
+        global_state.clang_state = arena_push_struct_zero(global_state.forever_arena, rained_clang_state);
+        rained_clang_init(global_state.clang_state);
     }
     arena_reset(global_state.frame_arena);
     
@@ -1048,6 +1002,25 @@ internal renderer_command *draw(rained_input *input)
                             tile_pop_view(global_state.focused_tile);
                             tile_push_view(global_state.focused_tile, b);
                         }
+                    }
+                }
+                else if(e.code == ('D' | MODIFIER_CTRL))
+                {
+                    string file_name;
+                    u32 position;
+                    if(rained_clang_find_definition(global_state.clang_state, global_state.focused_tile->view->buffer, global_state.focused_tile->view->carets[0], &position, &file_name, global_state.frame_arena))
+                    {
+                        rained_view *view = tile_find_view_by_buffer_file_name(global_state.focused_tile, file_name);
+                        if(view)
+                        {
+                            tile_switch_view(global_state.focused_tile, view);
+                        }
+                        else
+                        {
+                            rained_buffer *b = open_buffer_from_file(&global_state, file_name.p);
+                            tile_push_view(global_state.focused_tile, b);
+                        }
+                        global_state.focused_tile->view->carets[0].position = position;
                     }
                 }
             }

@@ -564,6 +564,7 @@ void __stdcall WinMainCRTStartup()
 
     PROFILE_END();
 
+
     u64 prev_frame;
     
     MSG message;

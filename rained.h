@@ -294,6 +294,56 @@ struct renderer_command
     } code_view;
 };
 
+typedef struct undo_buffer_entry undo_buffer_entry;
+struct undo_buffer_entry
+{
+    text_edit_kind      kind;
+    caret               *carets;
+    u32                 num_carets; 
+    string              *strings;
+    undo_buffer_entry   *next;
+    undo_buffer_entry   *prev;
+};
+
+typedef struct rained_buffer rained_buffer;
+struct rained_buffer
+{
+    string              path;
+    arena               *text_arena;
+    union
+    {
+        struct
+        {
+            char        *text;
+            u32         text_size;
+        };
+        string          text_string;
+    };
+    arena               *undo_buffer_arena;
+    undo_buffer_entry   *undo_buffer_tail;
+    undo_buffer_entry   *undo_buffer_position;
+    rained_buffer       *next;
+};
+
+typedef struct rained_view rained_view;
+struct rained_view
+{
+    rained_buffer       *buffer;
+    u32                 line_index;
+    f32                 y_offset_pixels;
+    caret               carets[1024];
+    u32                 num_carets;
+    rained_view         *next;
+    b32                 is_a_command_view; // note: mfgghhhhhhhh? idk.
+};
+
+typedef struct rained_tile rained_tile;
+struct rained_tile
+{
+    rect                rect;
+    rained_view         *view;
+};
+
 internal void os_mem_reserve(u64 size, void **address);
 internal void os_mem_commit(void *reserved, u64 size);
 internal void os_mem_free(void *base);

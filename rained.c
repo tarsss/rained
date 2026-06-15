@@ -796,26 +796,26 @@ internal b32 find_line_next(rained_buffer *buffer, u32 *p)
     return 0;
 }
 
-internal b32 find_line_prev(rained_buffer *buffer, u32 *p)
+internal u32 find_line_prev(rained_buffer *buffer, u32 p)
 {
-    (*p)--;
-    while(*p > 0)
+    p--;
+    while(p > 0)
     {
-        if(*p == 0 || buffer->text[*p] == '\r')
+        if(p == 0 || buffer->text[p] == '\r')
         {
             break;
         }
-        (*p)--;
+        p--;
     }
-    while(*p > 0)
+    while(p > 0)
     {
-        if(buffer->text[*p - 1] == '\n')
+        if(buffer->text[p - 1] == '\n')
         {
-            return 1;
+            return p;
         }
-        (*p)--;
+        p--;
     }
-    return 0;
+    return p;
 }
 
 internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount, b32 is_focused)
@@ -832,18 +832,10 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
     
     while(view->y_offset_pixels < 0 && view->line_index)
     {
-        u32 prev_p = p;
-        if(find_line_prev(view->buffer, &prev_p))
-        {
-            p = prev_p;
-            view->line_index--;
-            chopped_line_list l = chop_lines(view->buffer, width_cells, p, -1, 1, global_state.frame_arena);
-            view->y_offset_pixels = cell_height * l.count + view->y_offset_pixels;
-        }
-        else
-        {
-            break;
-        }
+        p = find_line_prev(view->buffer, p);
+        view->line_index--;
+        chopped_line_list l = chop_lines(view->buffer, width_cells, p, -1, 1, global_state.frame_arena);
+        view->y_offset_pixels = cell_height * l.count + view->y_offset_pixels;
     }
 
     while(1)

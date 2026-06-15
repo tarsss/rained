@@ -765,30 +765,57 @@ internal void push_renderer_command(draw_context *ctx, renderer_command cmd)
     sll_push(ctx->commands, p);
 }
 
-internal u32 find_line(rained_buffer *buffer, u32 line)
+internal u32 find_line(rained_buffer *buffer, u32 line, u32 *out_line)
 {
-    u32 cur_line = 0;
+    *out_line = 0;
     u32 line_start = 0;
     u32 i = 0;
-    while(cur_line < line)
+    while(*out_line != line && i < buffer->text_size)
     {
-        char c = buffer->text[i];
-        if(c == '\n')
+        if(buffer->text[i] == '\n')
         {
-            if(i + 1 >= buffer->text_size)
-            {
-                break;
-            }
-            cur_line++;
+            (*out_line)++;
             line_start = i + 1;
         }
         i++;
-        if(i == buffer->text_size)
+    }
+    return line_start;
+}
+
+internal b32 find_line_next(rained_buffer *buffer, u32 *p)
+{
+    while(*p < buffer->text_size)
+    {
+        if(buffer->text[*p] == '\n')
+        {
+            (*p)++;       
+            return 1;
+        }
+        (*p)++;
+    }
+    return 0;
+}
+
+internal b32 find_line_prev(rained_buffer *buffer, u32 *p)
+{
+    (*p)--;
+    while(*p > 0)
+    {
+        if(*p == 0 || buffer->text[*p] == '\r')
         {
             break;
         }
+        (*p)--;
     }
-    return line_start;
+    while(*p > 0)
+    {
+        if(buffer->text[*p - 1] == '\n')
+        {
+            return 1;
+        }
+        (*p)--;
+    }
+    return 0;
 }
 
 internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount, b32 is_focused)
@@ -799,23 +826,43 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
     u32 width_cells = (ctx->rect.max_x - ctx->rect.min_x + cell_width - 1) / cell_width;
     u32 height_cells = (ctx->rect.max_y - ctx->rect.min_y + cell_height - 1) / cell_height + 1;
 
+    u32 p = find_line(view->buffer, view->line_index, &view->line_index);
+
     view->y_offset_pixels -= scroll_amount;
     
     while(view->y_offset_pixels < 0 && view->line_index)
     {
-        view->line_index--;
-        chopped_line_list l = chop_lines(view->buffer, width_cells, find_line(view->buffer, view->line_index), -1, 1, global_state.frame_arena);
-        view->y_offset_pixels = cell_height * l.count + view->y_offset_pixels;
+        u32 prev_p = p;
+        if(find_line_prev(view->buffer, &prev_p))
+        {
+            p = prev_p;
+            view->line_index--;
+            chopped_line_list l = chop_lines(view->buffer, width_cells, p, -1, 1, global_state.frame_arena);
+            view->y_offset_pixels = cell_height * l.count + view->y_offset_pixels;
+        }
+        else
+        {
+            break;
+        }
     }
 
     while(1)
     {
-        chopped_line_list l = chop_lines(view->buffer, width_cells, find_line(view->buffer, view->line_index), -1, 1, global_state.frame_arena);
+        chopped_line_list l = chop_lines(view->buffer, width_cells, p, -1, 1, global_state.frame_arena);
         
         if(view->y_offset_pixels / cell_height > l.count && l.count)
         {   
-            view->line_index++;
-            view->y_offset_pixels -= cell_height * l.count;
+            u32 next_p = p;
+            if(find_line_next(view->buffer, &next_p))
+            {
+                view->line_index++;
+                view->y_offset_pixels -= cell_height * l.count;
+                p = next_p;
+            }
+            else
+            {
+                break;
+            }
         }
         else
         {
@@ -840,7 +887,7 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
 
     i32 offset_lines = max(0, view->y_offset_pixels / cell_height);
 
-    chopped_line_list chopped = chop_lines(view->buffer, width_cells, find_line(view->buffer, view->line_index), height_cells + offset_lines, -1, global_state.frame_arena);
+    chopped_line_list chopped = chop_lines(view->buffer, width_cells, p, height_cells + offset_lines, -1, global_state.frame_arena);
 
     if(chopped.count == 0)
     {
@@ -848,7 +895,8 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
         chopped.lines = arena_push_struct_zero(global_state.frame_arena, chopped_line);
     }
 
-    for(u32 y = 0; y < min(height_cells, chopped.count); y++)
+    i32 count = min((i32)height_cells, (i32)(chopped.count) - (i32)(offset_lines));
+    for(i32 y = 0; y < count; y++)
     {
         chopped_line *l = &chopped.lines[offset_lines + y];
 
@@ -983,6 +1031,11 @@ internal renderer_command *draw(rained_input *input)
                 else if(e.code == ('S' | MODIFIER_CTRL))
                 {
                     os_write_file(view->buffer->path.p, view->buffer->text, view->buffer->text_size);
+                }
+                else if(e.code == ('N' | MODIFIER_CTRL))
+                {
+                    rained_buffer *b = open_empty_buffer(&global_state);
+                    tile_push_view(global_state.focused_tile, b);
                 }
                 else if(e.code == ('P' | MODIFIER_CTRL))
                 {

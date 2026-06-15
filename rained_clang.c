@@ -53,7 +53,7 @@ internal void rained_clang_init(rained_clang_state *state)
     clang_visitChildren(cursor, &visit_node, 0);
 }
 
-internal b32 rained_clang_find_definition(rained_clang_state *state, rained_buffer *buffer, caret caret, u32 *position, string *file_name, arena *arena)
+internal b32 rained_clang_find_definition(rained_clang_state *state, rained_buffer *buffer, caret caret, u32 *position, string *file_path, arena *arena)
 {
     rained_clang_parse_the_whole_thing(state);
     CXFile file = clang_getFile(state->translation_unit, buffer->path.p);
@@ -65,7 +65,7 @@ internal b32 rained_clang_find_definition(rained_clang_state *state, rained_buff
     u32 def_pos;
     clang_getFileLocation(def_loc, &def_file, 0, 0, position);
     CXString cxstr = clang_getFileName(def_file);
-    *file_name = arena_push_cstring(arena, clang_getCString(cxstr));
+    *file_path = arena_push_cstring(arena, clang_getCString(cxstr));
     clang_disposeString(cxstr);
     return 1;
 }

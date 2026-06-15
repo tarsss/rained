@@ -142,16 +142,6 @@ internal string arena_push_cstring(arena_t *arena, char *cstring)
     };
 }
 
-internal string string_from_cstring(char *cstring)
-{
-    u32 l = cstring_length(cstring);
-    return (string)
-    {
-        .length = l,
-        .p = cstring
-    };
-}
-
 internal b32 string_match(string a, string b)
 {
     if(a.length != b.length)
@@ -166,6 +156,21 @@ internal b32 string_match(string a, string b)
         }
     }
     return 1;
+}
+
+internal b32 path_match(string path_a, string path_b)
+{
+    // todo: either could be relative or absolute
+    return string_match(path_a, path_b);
+}
+
+internal string string_copy(string str, arena *arena)
+{
+    return (string)
+    {
+        .p = arena_copy(arena, str.p, str.length),
+        .length = str.length
+    };
 }
 
 #define sll_push(sll, e) { void *t = sll; sll = e; e->next = t; }
@@ -628,15 +633,15 @@ internal rained_buffer *open_empty_buffer(rained_state *state)
     return buffer;
 }
 
-internal rained_buffer *open_buffer_from_file(rained_state *state, char *path)
+internal rained_buffer *open_buffer_from_file(rained_state *state, string path)
 {
     arena *text_arena = arena_alloc(gb(1), mb(1));
     u32 file_size = 0;
-    char *text = os_read_file(path, &file_size, text_arena);
+    char *text = os_read_file(path.p, &file_size, text_arena);
     rained_buffer *buffer = arena_push_struct_zero(state->forever_arena, rained_buffer);
     *buffer = (rained_buffer)
     {
-        .path = arena_push_cstring(state->forever_arena, path),
+        .path = string_copy(path, state->forever_arena),
         .text = text,
         .text_arena = text_arena,
         .text_size = file_size,
@@ -668,7 +673,7 @@ internal rained_view *tile_find_view_by_buffer_file_name(rained_tile *tile, stri
     rained_view *v = tile->view;
     while(v)
     {
-        if(string_match(v->buffer->path, buffer_file_name))
+        if(path_match(v->buffer->path, buffer_file_name))
         {
             return v;
         }
@@ -927,8 +932,8 @@ internal renderer_command *draw(rained_input *input)
         global_state.tile_left = arena_push_struct_zero(global_state.forever_arena, rained_tile);
         global_state.tile_right = arena_push_struct_zero(global_state.forever_arena, rained_tile);
         global_state.focused_tile = global_state.tile_left;
-        rained_buffer *b0 = open_buffer_from_file(&global_state, "test.txt");
-        rained_buffer *b1 = open_buffer_from_file(&global_state, "rained.c");
+        rained_buffer *b0 = open_buffer_from_file(&global_state, arena_push_cstring(global_state.frame_arena, ".\\test.txt"));
+        rained_buffer *b1 = open_buffer_from_file(&global_state, arena_push_cstring(global_state.frame_arena, ".\\rained.c"));
         rained_view *v0 = tile_push_view(global_state.tile_left, b0);
         rained_view *v1 = tile_push_view(global_state.tile_right, b1);
         global_state.clang_state = arena_push_struct_zero(global_state.forever_arena, rained_clang_state);
@@ -998,7 +1003,7 @@ internal renderer_command *draw(rained_input *input)
                         else
                         {
                             // todo: a typo? have this (int*)0 = 0 fuck you
-                            rained_buffer *b = open_buffer_from_file(&global_state, global_state.focused_tile->view->buffer->text);
+                            rained_buffer *b = open_buffer_from_file(&global_state, global_state.focused_tile->view->buffer->text_string);
                             tile_pop_view(global_state.focused_tile);
                             tile_push_view(global_state.focused_tile, b);
                         }
@@ -1017,7 +1022,7 @@ internal renderer_command *draw(rained_input *input)
                         }
                         else
                         {
-                            rained_buffer *b = open_buffer_from_file(&global_state, file_name.p);
+                            rained_buffer *b = open_buffer_from_file(&global_state, file_name);
                             tile_push_view(global_state.focused_tile, b);
                         }
                         global_state.focused_tile->view->carets[0].position = position;

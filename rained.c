@@ -115,6 +115,16 @@ internal void arena_release(arena *arena)
     os_mem_free(arena->base);
 }
 
+internal void arena_commit_to_fit_used(arena *arena)
+{
+    if(arena->used > arena->commited)
+    {
+        u64 commitSize = (arena->used + PAGE_SIZE) / PAGE_SIZE * PAGE_SIZE;
+        arena->commited = commitSize;
+        os_mem_commit(arena -> base, commitSize);
+    }
+}
+
 #define arena_push_zero(a,s,al) (memset(arena_push(a, s, al), 0, s)) 
 #define arena_push_struct(a, s) (arena_push(a, sizeof(s), 8))
 #define arena_push_struct_noalign(a, s) (arena_push_noalign(a, sizeof(s)))
@@ -400,6 +410,8 @@ internal void carets_insert_characters(rained_view *view, text_edit_insert inser
         caret *caret = &view->carets[c];
         if(s.length)
         {
+            view->buffer->text_arena->used += s.length;
+            arena_commit_to_fit_used(view->buffer->text_arena);
             caret->position += offset;
             offset += s.length;
             u32 p = caret->position;
@@ -475,6 +487,7 @@ internal void carets_remove_characters(rained_view *view, text_edit_delete delet
             view->buffer->text[i] = view->buffer->text[i + num_to_remove];
         }
         view->buffer->text_size -= num_to_remove;
+        view->buffer->text_arena->used -= num_to_remove;
         caret->position -= num_to_remove;
         caret->wish_column = caret_get_column(view->buffer, caret);
     }
@@ -621,7 +634,7 @@ internal void redo(rained_view *view)
 
 internal rained_buffer *open_empty_buffer(rained_state *state)
 {
-    arena *text_arena = arena_alloc(gb(1), mb(1));
+    arena *text_arena = arena_alloc(gb(1), 0);
     rained_buffer *buffer = arena_push_struct_zero(state->forever_arena, rained_buffer);
     *buffer = (rained_buffer)
     {
@@ -635,7 +648,7 @@ internal rained_buffer *open_empty_buffer(rained_state *state)
 
 internal rained_buffer *open_buffer_from_file(rained_state *state, string path)
 {
-    arena *text_arena = arena_alloc(gb(1), mb(1));
+    arena *text_arena = arena_alloc(gb(1), 0);
     u32 file_size = 0;
     char *text = os_read_file(path.p, &file_size, text_arena);
     rained_buffer *buffer = arena_push_struct_zero(state->forever_arena, rained_buffer);

@@ -1,3 +1,4 @@
+
 #ifndef RAINED_H
 #define RAINED_H
 
@@ -335,6 +336,7 @@ struct rained_view
     u32                 num_carets;
     rained_view         *next;
     b32                 is_a_command_view; // note: mfgghhhhhhhh? idk.
+    b32                 fit_caret;
 };
 
 typedef struct rained_tile rained_tile;

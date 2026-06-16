@@ -320,13 +320,13 @@ internal void caret_move_to_line_start(rained_buffer *buffer, caret *caret)
     }
 }
 
-internal void caret_go_to_column(rained_buffer *buffer, caret *caret, u32 col)
+internal void caret_go_to_column(rained_view *view, caret *caret, u32 col)
 {
-    caret_move_to_line_start(buffer, caret);
+    caret_move_to_line_start(view->buffer, caret);
     u32 c = 0;
-    while(c != col && caret->position != buffer->text_size)
+    while(c != col && caret->position != view->buffer->text_size)
     {
-        if(buffer->text[caret->position] == '\r')
+        if(view->buffer->text[caret->position] == '\r')
         {
             break;
         }
@@ -348,18 +348,16 @@ internal void caret_move_to_next_line(rained_buffer *buffer, caret *caret)
     }
 }
 
-internal void caret_move_up(rained_buffer *buffer, caret *caret)
+internal void caret_move_up(rained_view *view, caret *caret)
 {
-    caret_move_to_prev_line(buffer, caret);
-    caret_go_to_column(buffer, caret, caret->wish_column);
-    
+    caret_move_to_prev_line(view->buffer, caret);
+    caret_go_to_column(view, caret, caret->wish_column);
 }
 
-internal void caret_move_down(rained_buffer *buffer, caret *caret)
+internal void caret_move_down(rained_view *view, caret *caret)
 {
-    caret_move_to_next_line(buffer, caret);
-    caret_go_to_column(buffer, caret, caret->wish_column);
-    
+    caret_move_to_next_line(view->buffer, caret);
+    caret_go_to_column(view, caret, caret->wish_column);
 }
 
 internal void carets_bubble_sort_top_to_bottom(rained_view *view)
@@ -511,7 +509,7 @@ internal void caret_spawn_new_below(rained_view *view)
         }
     }
     view->carets[view->num_carets] = bottom_caret;
-    caret_move_down(view->buffer, &view->carets[view->num_carets]);
+    caret_move_down(view, &view->carets[view->num_carets]);
     view->num_carets++;
 }
 
@@ -526,7 +524,7 @@ internal void caret_spawn_new_above(rained_view *view)
         }
     }
     view->carets[view->num_carets] = top_caret;
-    caret_move_up(view->buffer, &view->carets[view->num_carets]);
+    caret_move_up(view, &view->carets[view->num_carets]);
     view->num_carets++;
 }
 
@@ -824,6 +822,7 @@ internal b32 find_line_next(rained_buffer *buffer, u32 *p)
     return 0;
 }
 
+// todo: research why this seems to work
 internal u32 find_line_prev(rained_buffer *buffer, u32 p)
 {
     if(p == 0)
@@ -876,13 +875,61 @@ internal u32 find_line_index(rained_buffer *buffer, u32 p)
     return line_index;
 }
 
+internal u32 chopped_line_list_find_position(chopped_line_list list, u32 p)
+{
+    for(u32 i = 0; i < list.count; i++)
+    {
+        if(p >= list.lines[i].pos_in_text && p < list.lines[i].pos_in_text + list.lines[i].length)
+        {
+            return i;
+        }
+    }
+    assert(0);
+    return 0;
+}
+
+internal void caret_move_down_chopped(rained_view *view, caret *caret)
+{
+    u32 start = find_line_start(view->buffer, caret->position);
+    chopped_line_list list = chop_lines(view->buffer, view->width_cells, start, -1, 1, global_state.frame_arena);
+    u32 line_ind = chopped_line_list_find_position(list, caret->position) + 1;
+    if(line_ind < list.count)
+    {
+        caret->position = list.lines[line_ind].pos_in_text + min(caret->wish_column, list.lines[line_ind].length);
+        return;
+    }
+    caret_move_to_next_line(view->buffer, caret);
+    caret_go_to_column(view, caret, caret->wish_column);
+}
+
+internal void caret_move_up_chopped(rained_view *view, caret *caret)
+{
+    u32 start = find_line_start(view->buffer, caret->position);
+    chopped_line_list list = chop_lines(view->buffer, view->width_cells, start, -1, 1, global_state.frame_arena);
+    u32 line_ind = chopped_line_list_find_position(list, caret->position);
+    if(line_ind > 0)
+    {
+        line_ind--;
+        caret->position = list.lines[line_ind].pos_in_text + min(caret->wish_column, list.lines[line_ind].length);
+        return;
+    }
+    caret_move_to_prev_line(view->buffer, caret);
+    caret_move_to_line_start(view->buffer, caret);
+    list = chop_lines(view->buffer, view->width_cells, caret->position, -1, 1, global_state.frame_arena);
+    caret->position = list.lines[list.count - 1].pos_in_text + min(caret->wish_column, list.lines[list.count - 1].length);
+    if(view->buffer->text_size > caret->position && view->buffer->text[caret->position] == '\n') // todo: grrrrrrrrrrrrrrr.
+    {
+        caret->position--;
+    }
+}
+
 internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount, b32 is_focused)
 {
     u32 cell_width = 8;
     u32 cell_height = 18;
 
-    u32 width_cells = (ctx->rect.max_x - ctx->rect.min_x + cell_width - 1) / cell_width;
-    u32 height_cells = (ctx->rect.max_y - ctx->rect.min_y + cell_height - 1) / cell_height + 1;
+    view->width_cells = (ctx->rect.max_x - ctx->rect.min_x + cell_width - 1) / cell_width;
+    view->height_cells = (ctx->rect.max_y - ctx->rect.min_y + cell_height - 1) / cell_height + 1;
 
     if(view->fit_caret)
     {
@@ -893,7 +940,7 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
         if(caret_line <= view->line_index)
         {
             u32 line_start = find_line_start(view->buffer, fit_pos);
-            u32 offset = position_to_line_in_chopped_line(view->buffer, width_cells, line_start, fit_pos, global_state.frame_arena) * cell_height;
+            u32 offset = position_to_line_in_chopped_line(view->buffer, view->width_cells, line_start, fit_pos, global_state.frame_arena) * cell_height;
             if(caret_line == view->line_index)
             {
                 view->y_offset_pixels = min(view->y_offset_pixels, offset);
@@ -908,21 +955,23 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
         {
             fit_pos = view->carets[view->num_carets - 1].position;
             // fit down. offset the caret line height_cells + offset chopped lines up for a new view line_index and offset...
+            // todo: there's a bug with very long lines, when caret chopped line index > screen height it just stops tracking 
             u32 line_start = find_line_start(view->buffer, fit_pos);
-            u32 offset = position_to_line_in_chopped_line(view->buffer, width_cells, line_start, fit_pos, global_state.frame_arena);
-            u32 height = height_cells - min(height_cells, 3);
+            u32 offset = position_to_line_in_chopped_line(view->buffer, view->width_cells, line_start, fit_pos, global_state.frame_arena);
+            u32 height = view->height_cells - min(view->height_cells, 3);
             u32 pos = fit_pos;
             u32 line_ind = find_line_index(view->buffer, pos);
             while(line_ind)
             {
                 pos = find_line_prev(view->buffer, pos);
                 line_ind--;
-                chopped_line_list l = chop_lines(view->buffer, width_cells, pos, -1, 1, global_state.frame_arena);
+                chopped_line_list l = chop_lines(view->buffer, view->width_cells, pos, -1, 1, global_state.frame_arena);
                 offset += l.count;
                 if(offset > height)
                 {
                     u32 offset_pixels = (offset - height);
                     offset_pixels *= cell_height;
+
                     if(line_ind > view->line_index)
                     {
                         view->line_index = line_ind;
@@ -932,6 +981,7 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
                     {
                         view->y_offset_pixels = max(view->y_offset_pixels, offset_pixels);
                     }
+
                     break;
                 }
             }
@@ -948,13 +998,13 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
     {
         p = find_line_prev(view->buffer, p);
         view->line_index--;
-        chopped_line_list l = chop_lines(view->buffer, width_cells, p, -1, 1, global_state.frame_arena);
+        chopped_line_list l = chop_lines(view->buffer, view->width_cells, p, -1, 1, global_state.frame_arena);
         view->y_offset_pixels = cell_height * l.count + view->y_offset_pixels;
     }
 
     while(1)
     {
-        chopped_line_list l = chop_lines(view->buffer, width_cells, p, -1, 1, global_state.frame_arena);
+        chopped_line_list l = chop_lines(view->buffer, view->width_cells, p, -1, 1, global_state.frame_arena);
         
         if(view->y_offset_pixels / cell_height > l.count && l.count)
         {   
@@ -980,7 +1030,7 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
     u32 bg_color = 0x00000000;
     u32 caret_line_color = 0x001F1F1F;
 
-    u32 cell_count = width_cells * height_cells; 
+    u32 cell_count = view->width_cells * view->height_cells; 
     cell *cells = arena_push(global_state.frame_arena, cell_count * sizeof(cell), 64);
 
     for(u32 i = 0; i < cell_count; i++)
@@ -993,7 +1043,7 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
 
     i32 offset_lines = max(0, view->y_offset_pixels / cell_height);
 
-    chopped_line_list chopped = chop_lines(view->buffer, width_cells, p, height_cells + offset_lines, -1, global_state.frame_arena);
+    chopped_line_list chopped = chop_lines(view->buffer, view->width_cells, p, view->height_cells + offset_lines, -1, global_state.frame_arena);
 
     if(chopped.count == 0)
     {
@@ -1001,15 +1051,15 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
         chopped.lines = arena_push_struct_zero(global_state.frame_arena, chopped_line);
     }
 
-    i32 count = min((i32)height_cells, (i32)(chopped.count) - (i32)(offset_lines));
+    i32 count = min((i32)view->height_cells, (i32)(chopped.count) - (i32)(offset_lines));
     for(i32 y = 0; y < count; y++)
     {
         chopped_line *l = &chopped.lines[offset_lines + y];
 
-        for(u32 j = 0; j < min(l->length, width_cells); j++)
+        for(u32 j = 0; j < min(l->length, view->width_cells); j++)
         {
             char c = view->buffer->text[l->pos_in_text + j];
-            u32 cell_index = j + y * width_cells;
+            u32 cell_index = j + y * view->width_cells;
 
             cells[cell_index] = (cell) 
             { 
@@ -1022,11 +1072,11 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
         for(u32 k = 0; k < view->num_carets; k++)
         {
             caret *caret = &view->carets[k];
-            if(caret->position >= l->pos_in_text && caret->position <= l->pos_in_text + l->length)
+            if(caret->position >= l->pos_in_text && caret->position < l->pos_in_text + l->length)
             {
-                for(u32 j = 0; j < width_cells; j++)
+                for(u32 j = 0; j < view->width_cells; j++)
                 {
-                    cells[y * width_cells + j].bg_color = caret_line_color;
+                    cells[y * view->width_cells + j].bg_color = caret_line_color;
                 }
             }
         }
@@ -1036,9 +1086,9 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
             for(u32 k = 0; k < view->num_carets; k++)
             {
                 caret *caret = &view->carets[k];
-                if(caret->position >= l->pos_in_text && caret->position <= l->pos_in_text + l->length)          
+                if(caret->position >= l->pos_in_text && caret->position < l->pos_in_text + l->length)          
                 {      
-                    cell *c = &cells[caret->position - l->pos_in_text + y * width_cells];
+                    cell *c = &cells[caret->position - l->pos_in_text + y * view->width_cells];
                     c->bg_color = ~c->bg_color;
                     c->text_color = ~c->text_color;
                 }
@@ -1054,8 +1104,8 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
             .cells = cells,
             .cell_width = cell_width,
             .cell_height = cell_height,
-            .num_cells_x = width_cells,
-            .num_cells_y = height_cells,
+            .num_cells_x = view->width_cells,
+            .num_cells_y = view->height_cells,
             .atlas_width_characters_x = 14,
             .atlas_height_characters_y = 7,
             .view_offset_pixels = view->y_offset_pixels < 0.0f ? view->y_offset_pixels : (i32)view->y_offset_pixels % cell_height,
@@ -1087,7 +1137,7 @@ internal renderer_command *draw(rained_input *input)
         global_state.tile_right = arena_push_struct_zero(global_state.forever_arena, rained_tile);
         global_state.focused_tile = global_state.tile_left;
         rained_buffer *b0 = open_buffer_from_file(&global_state, arena_push_cstring(global_state.frame_arena, ".\\test.txt"));
-        rained_buffer *b1 = open_buffer_from_file(&global_state, arena_push_cstring(global_state.frame_arena, ".\\rained.c"));
+        rained_buffer *b1 = open_buffer_from_file(&global_state, arena_push_cstring(global_state.frame_arena, ".\\rained_win32.c"));
         rained_view *v0 = tile_push_view(global_state.tile_left, b0);
         rained_view *v1 = tile_push_view(global_state.tile_right, b1);
         global_state.clang_state = arena_push_struct_zero(global_state.forever_arena, rained_clang_state);
@@ -1185,6 +1235,7 @@ internal renderer_command *draw(rained_input *input)
                             tile_push_view(global_state.focused_tile, b);
                         }
                         global_state.focused_tile->view->carets[0].position = position;
+                        global_state.focused_tile->view->fit_caret = 1;
                     }
                 }
             }
@@ -1258,12 +1309,12 @@ internal renderer_command *draw(rained_input *input)
                     }
                     else if(e.code == KEY_DOWN)
                     {
-                        caret_move_down(view->buffer, caret);
+                        caret_move_down_chopped(view, caret);
                         view->fit_caret = 1;
                     }
                     else if(e.code == KEY_UP)
                     {
-                        caret_move_up(view->buffer, caret);
+                        caret_move_up_chopped(view, caret);
                         view->fit_caret = 1;
                     }
                 }

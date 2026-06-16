@@ -337,6 +337,8 @@ struct rained_view
     rained_view         *next;
     b32                 is_a_command_view; // note: mfgghhhhhhhh? idk.
     b32                 fit_caret;
+    u32                 width_cells;
+    u32                 height_cells;
 };
 
 typedef struct rained_tile rained_tile;

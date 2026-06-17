@@ -217,20 +217,12 @@ internal loaded_bitmap load_bitmap(char *path, arena_t *arena)
     return bitmap;
 }
 
-internal u32 caret_get_column(rained_buffer *buffer, caret *caret)
+internal u32 caret_get_column(rained_view *view, caret *caret)
 {
-    for(u32 i = caret->position; i >= 0; i--)
-    {
-        if(i == 0)
-        {
-            return caret->position - i;
-        }
-        if(buffer->text[i] == '\n')
-        {
-            return caret->position - i - 1;
-        }
-    }
-    return 0;
+    u32 start = find_line_start(view->buffer, caret->position);
+    chopped_line_list list = chop_lines(view->buffer, view->width_cells, start, -1, 1, global_state.frame_arena);
+    chopped_line l = list.lines[chopped_line_list_find_position(list, caret->position)];
+    return caret->position - l.pos_in_text;
 }
 
 internal void merge_overlapping_carets_in_a_slow_way(rained_view *view)
@@ -256,12 +248,12 @@ internal void merge_overlapping_carets_in_a_slow_way(rained_view *view)
     view->num_carets = n;
 }
 
-internal void caret_move_right(rained_buffer *buffer, caret *caret)
+internal void caret_move_right(rained_view *view, caret *caret)
 {
     u32 p = caret->position;
-    while(caret->position != buffer->text_size)
+    while(caret->position != view->buffer->text_size)
     {
-        char c = buffer->text[caret->position];
+        char c = view->buffer->text[caret->position];
         caret->position++;
         if(c == '\n')
         {
@@ -272,16 +264,16 @@ internal void caret_move_right(rained_buffer *buffer, caret *caret)
             break;
         }
     }
-    caret->wish_column = caret_get_column(buffer, caret);
+    caret->wish_column = caret_get_column(view, caret);
     
 }
 
-internal void caret_move_left(rained_buffer *buffer, caret *caret)
+internal void caret_move_left(rained_view *view, caret *caret)
 {
     while(caret->position)
     {
         caret->position--;
-        char c = buffer->text[caret->position];
+        char c = view->buffer->text[caret->position];
         if(c == '\r')
         {
             break;
@@ -291,7 +283,7 @@ internal void caret_move_left(rained_buffer *buffer, caret *caret)
             break;
         }
     }
-    caret->wish_column = caret_get_column(buffer, caret);
+    caret->wish_column = caret_get_column(view, caret);
     
 }
 
@@ -424,7 +416,7 @@ internal void carets_insert_characters(rained_view *view, text_edit_insert inser
             view->buffer->text_size += s.length;
             caret->position += s.length;
         }
-        caret->wish_column = caret_get_column(view->buffer, caret);
+        caret->wish_column = caret_get_column(view, caret);
     }
     if(write_undo)
     {
@@ -488,7 +480,7 @@ internal void carets_remove_characters(rained_view *view, text_edit_delete delet
         view->buffer->text_size -= num_to_remove;
         view->buffer->text_arena->used -= num_to_remove;
         caret->position -= num_to_remove;
-        caret->wish_column = caret_get_column(view->buffer, caret);
+        caret->wish_column = caret_get_column(view, caret);
     }
     if(write_undo)
     {
@@ -701,12 +693,6 @@ internal void tile_pop_view(rained_tile *tile)
     sll_pop(tile->view);
 }
 
-typedef struct
-{
-    chopped_line    *lines;
-    u32             count;
-} chopped_line_list;
-
 internal chopped_line_list chop_lines(rained_buffer *buffer, u32 width_cells, u32 start, u32 num_to_chop, u32 num_lines, arena *arena)
 {
     chopped_line_list res = 
@@ -884,8 +870,21 @@ internal u32 chopped_line_list_find_position(chopped_line_list list, u32 p)
             return i;
         }
     }
-    assert(0);
-    return 0;
+    return list.count - 1;
+}
+
+internal void caret_step_step_line_columns(rained_buffer *buffer, caret *caret, u32 count)
+{
+    u32 c = 0;
+    while(c < count && caret->position != buffer->text_size)
+    {
+        if(buffer->text[caret->position] == '\r')
+        {
+            break;
+        }
+        caret->position++;
+        c++;
+    }
 }
 
 internal void caret_move_down_chopped(rained_view *view, caret *caret)
@@ -895,7 +894,8 @@ internal void caret_move_down_chopped(rained_view *view, caret *caret)
     u32 line_ind = chopped_line_list_find_position(list, caret->position) + 1;
     if(line_ind < list.count)
     {
-        caret->position = list.lines[line_ind].pos_in_text + min(caret->wish_column, list.lines[line_ind].length);
+        caret->position = list.lines[line_ind].pos_in_text;
+        caret_step_step_line_columns(view->buffer, caret, min(caret->wish_column, list.lines[line_ind].length));
         return;
     }
     caret_move_to_next_line(view->buffer, caret);
@@ -910,17 +910,15 @@ internal void caret_move_up_chopped(rained_view *view, caret *caret)
     if(line_ind > 0)
     {
         line_ind--;
-        caret->position = list.lines[line_ind].pos_in_text + min(caret->wish_column, list.lines[line_ind].length);
+        caret->position = list.lines[line_ind].pos_in_text;
+        caret_step_step_line_columns(view->buffer, caret, min(caret->wish_column, list.lines[line_ind].length));
         return;
     }
     caret_move_to_prev_line(view->buffer, caret);
     caret_move_to_line_start(view->buffer, caret);
     list = chop_lines(view->buffer, view->width_cells, caret->position, -1, 1, global_state.frame_arena);
-    caret->position = list.lines[list.count - 1].pos_in_text + min(caret->wish_column, list.lines[list.count - 1].length);
-    if(view->buffer->text_size > caret->position && view->buffer->text[caret->position] == '\n') // todo: grrrrrrrrrrrrrrr.
-    {
-        caret->position--;
-    }
+    caret->position = list.lines[list.count - 1].pos_in_text;
+    caret_step_step_line_columns(view->buffer, caret, min(caret->wish_column, list.lines[list.count - 1].length));
 }
 
 internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount, b32 is_focused)
@@ -1299,12 +1297,12 @@ internal renderer_command *draw(rained_input *input)
                 {
                     if(e.code == KEY_RIGHT)
                     {
-                        caret_move_right(view->buffer, caret);
+                        caret_move_right(view, caret);
                         view->fit_caret = 1;
                     }
                     else if(e.code == KEY_LEFT)
                     {
-                        caret_move_left(view->buffer, caret);
+                        caret_move_left(view, caret);
                         view->fit_caret = 1;
                     }
                     else if(e.code == KEY_DOWN)

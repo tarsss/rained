@@ -1049,6 +1049,12 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
         chopped.lines = arena_push_struct_zero(global_state.frame_arena, chopped_line);
     }
 
+    u32 *caret_lines = arena_push(global_state.frame_arena, sizeof(u32) * view->num_carets, 8);
+    for(u32 i = 0 ; i < view->num_carets; i++)
+    {
+        caret_lines[i] = find_line_index(view->buffer, view->carets[i].position);
+    }
+
     i32 count = min((i32)view->height_cells, (i32)(chopped.count) - (i32)(offset_lines));
     for(i32 y = 0; y < count; y++)
     {
@@ -1069,8 +1075,7 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
 
         for(u32 k = 0; k < view->num_carets; k++)
         {
-            caret *caret = &view->carets[k];
-            if(caret->position >= l->pos_in_text && caret->position < l->pos_in_text + l->length)
+            if(view->line_index + l->line_index == caret_lines[k])
             {
                 for(u32 j = 0; j < view->width_cells; j++)
                 {

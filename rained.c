@@ -145,11 +145,13 @@ internal u32 cstring_length(char *cstr)
 internal string arena_push_cstring(arena_t *arena, char *cstring)
 {
     u32 l = cstring_length(cstring);
-    return (string)
+    string str = (string)
     {
         .length = l,
         .p = arena_copy(arena, cstring, l + 1),
     };
+    str.p[str.length] = '\0';
+    return str;
 }
 
 internal b32 string_match(string a, string b)
@@ -178,7 +180,7 @@ internal string string_copy(string str, arena *arena)
 {
     return (string)
     {
-        .p = arena_copy(arena, str.p, str.length),
+        .p = arena_copy(arena, str.p, str.length + 1),
         .length = str.length
     };
 }
@@ -1027,6 +1029,7 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
     u32 text_color = 0x009F9F9F;
     u32 bg_color = 0x00000000;
     u32 caret_line_color = 0x001F1F1F;
+    u32 selection_color = 0x00545e52;
 
     u32 cell_count = view->width_cells * view->height_cells; 
     cell *cells = arena_push(global_state.frame_arena, cell_count * sizeof(cell), 64);
@@ -1075,7 +1078,18 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
 
         for(u32 k = 0; k < view->num_carets; k++)
         {
-            if(view->line_index + l->line_index == caret_lines[k])
+            caret *caret = &view->carets[k];
+
+            if(caret->selection_active)
+            {
+                u32 start = max(l->pos_in_text, min(caret->position, caret->selection_pos));
+                u32 end = min((l->pos_in_text + l->length), max(caret->position, caret->selection_pos));
+                for(u32 j = start; j < end; j++)
+                {
+                    cells[y * view->width_cells + j - l->pos_in_text].bg_color = selection_color;
+                }
+            }
+            else if(view->line_index + l->line_index == caret_lines[k])
             {
                 for(u32 j = 0; j < view->width_cells; j++)
                 {
@@ -1083,13 +1097,13 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
                 }
             }
         }
-
+        
         if(is_focused)
         {
             for(u32 k = 0; k < view->num_carets; k++)
             {
                 caret *caret = &view->carets[k];
-                if(caret->position >= l->pos_in_text && caret->position < l->pos_in_text + l->length)          
+                if(caret->position >= l->pos_in_text && caret->position < l->pos_in_text + l->length)
                 {      
                     cell *c = &cells[caret->position - l->pos_in_text + y * view->width_cells];
                     c->bg_color = ~c->bg_color;
@@ -1153,6 +1167,15 @@ internal renderer_command *draw(rained_input *input)
     for(u32 i = 0; i < input->input_queue_count; i++)
     {
         input_event e = input->input_queue[i];
+
+        if(e.is_down && e.code == (KEY_SHIFT | MODIFIER_SHIFT))
+        {
+            for(u32 i = 0; i < view->num_carets; i++)
+            {
+                view->carets[i].selection_pos = view->carets[i].position;
+                view->carets[i].selection_active = 1;
+            }
+        }
 
         if(e.is_down)
         {
@@ -1246,6 +1269,43 @@ internal renderer_command *draw(rained_input *input)
 
         if(e.type == INPUT_EVENT_TEXT)
         {
+            if((e.character > 31 && e.character != '`') || e.character == '\b')
+            {
+                text_edit_delete delete = 
+                {
+                    .lengths = arena_push(global_state.frame_arena, sizeof(u32) * view->num_carets, 8)
+                };
+                b32 do_delete = 0;
+                for(u32 j = 0; j < view->num_carets; j++)
+                {
+                    caret *caret = &view->carets[j];
+                    u32 length = 0;
+                    if(caret->selection_active)
+                    {
+                        if(caret->position > caret->selection_pos)
+                        {
+                            length = caret->position - caret->selection_pos;
+                        }
+                        else
+                        {
+                            length = caret->selection_pos - caret->position;
+                            caret->position = caret->selection_pos;
+                        }
+                    }
+                    else if(e.code == '\b')
+                    {
+                        length = max(length, 1);
+                    }
+                    delete.lengths[j] = length;
+                    do_delete |= length;
+                    caret->selection_active = 0;
+                }
+                if(do_delete)
+                {
+                    carets_remove_characters(view, delete, 1);
+                }
+            }
+
             if(e.character > 31 && e.character != '`') // i've lost my enter key
             {
                 text_edit_insert insert = 
@@ -1279,18 +1339,6 @@ internal renderer_command *draw(rained_input *input)
                 }
                 carets_insert_characters(view, insert, 1);
             }
-            else if(e.character == '\b')
-            {
-                text_edit_delete delete = 
-                {
-                    .lengths = arena_push(global_state.frame_arena, sizeof(u32) * view->num_carets, 8)
-                };
-                for(u32 j = 0; j < view->num_carets; j++)
-                {
-                    delete.lengths[j] = 1;
-                }
-                carets_remove_characters(view, delete, 1);
-            }
         }
 
         for(u32 i = 0; i < view->num_carets; i++)
@@ -1300,25 +1348,29 @@ internal renderer_command *draw(rained_input *input)
             {
                 if(e.type == INPUT_EVENT_KEY)
                 {
-                    if(e.code == KEY_RIGHT)
+                    if(e.code == KEY_RIGHT || e.code == (KEY_RIGHT | MODIFIER_SHIFT))
                     {
                         caret_move_right(view, caret);
                         view->fit_caret = 1;
+                        caret->selection_active = (e.code & MODIFIER_SHIFT);
                     }
-                    else if(e.code == KEY_LEFT)
+                    else if(e.code == KEY_LEFT || e.code == (KEY_LEFT | MODIFIER_SHIFT))
                     {
                         caret_move_left(view, caret);
                         view->fit_caret = 1;
+                        caret->selection_active = (e.code & MODIFIER_SHIFT);
                     }
-                    else if(e.code == KEY_DOWN)
+                    else if(e.code == KEY_DOWN || e.code == (KEY_DOWN | MODIFIER_SHIFT))
                     {
                         caret_move_down_chopped(view, caret);
                         view->fit_caret = 1;
+                        caret->selection_active = (e.code & MODIFIER_SHIFT);
                     }
-                    else if(e.code == KEY_UP)
+                    else if(e.code == KEY_UP || e.code == (KEY_UP | MODIFIER_SHIFT))
                     {
                         caret_move_up_chopped(view, caret);
                         view->fit_caret = 1;
+                        caret->selection_active = (e.code & MODIFIER_SHIFT);
                     }
                 }
             }

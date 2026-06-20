@@ -164,6 +164,9 @@ typedef enum KEY_MODIFIER
 
 typedef enum KEY_CODE
 {
+    KEY_SHIFT = 0x10,
+    KEY_CTRL = 0x11,
+    KEY_ALT = 0x12,
     KEY_ENTER = 0x0D,
     KEY_LEFT = 0x25,
     KEY_UP = 0x26,
@@ -187,7 +190,7 @@ typedef enum KEY_CODE
     KEY_MINUS = 0xBD,
     KEY_PERIOD = 0xBE,
     KEY_THE_ONE_RIGHT_BELOW_ESCAPE = 0xC0,
-
+    
 } KEY_CODE;
 
 typedef struct
@@ -232,6 +235,8 @@ typedef struct
 {
     u32 position;
     u32 wish_column;
+    u32 selection_pos;
+    b32 selection_active;
     
 } caret;
 

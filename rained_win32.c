@@ -163,6 +163,35 @@ internal void os_toggle_fullscreen()
     }
 }
 
+internal string os_clipboard_get(arena *arena)
+{
+    string res = { 0 };
+    if(OpenClipboard(window))
+    {
+        HANDLE handle = GetClipboardData(CF_TEXT);
+        void *mem = GlobalLock(handle);
+        res = arena_push_cstring(arena, mem);
+        GlobalUnlock(mem);
+        CloseClipboard();
+    }
+    return res;
+}
+
+internal void os_clipboard_set(string text)
+{
+    if(OpenClipboard(window))
+    {
+        EmptyClipboard();
+        HANDLE *handle = GlobalAlloc(GMEM_MOVEABLE, text.length + 1);
+        char *mem = GlobalLock(handle);
+        memcpy(mem, text.p, text.length);
+        mem[text.length] = '\0';
+        GlobalUnlock(handle);
+        SetClipboardData(CF_TEXT, handle);
+        CloseClipboard();
+    }
+}
+
 static input_event input_queue[128];
 static u32         input_queue_count;
 

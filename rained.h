@@ -365,6 +365,8 @@ internal u64 os_time_us();
 internal void *os_read_file(char *path, u32 *out_size, arena_t *arena);
 internal void os_write_file(char *path, void *stuff, u64 size_bytes);
 internal void os_toggle_fullscreen();
+internal string os_clipboard_get(arena *arena);
+internal void os_clipboard_set(string text);
 
 internal u32 chopped_line_list_find_position(chopped_line_list list, u32 p);
 internal chopped_line_list chop_lines(rained_buffer *buffer, u32 width_cells, u32 start, u32 num_to_chop, u32 num_lines, arena *arena);

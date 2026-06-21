@@ -227,6 +227,7 @@ internal u32 caret_get_column(rained_view *view, caret *caret)
     return caret->position - l.pos_in_text;
 }
 
+// todo: we probably don't want overlapping selection ranges, so merge by ranges too?
 internal void merge_overlapping_carets_in_a_slow_way(rained_view *view)
 {
     u32 n = 0;
@@ -267,7 +268,6 @@ internal void caret_move_right(rained_view *view, caret *caret)
         }
     }
     caret->wish_column = caret_get_column(view, caret);
-    
 }
 
 internal void caret_move_left(rained_view *view, caret *caret)
@@ -850,6 +850,20 @@ internal u32 find_line_start(rained_buffer *buffer, u32 p)
     return p;
 }
 
+internal u32 find_line_end(rained_buffer *buffer, u32 line_start)
+{
+    u32 p = line_start;
+    while(1)
+    {
+        if(p == buffer->text_size - 1 || buffer->text[p] == '\r' || buffer->text[p] == '\n')
+        {
+            break;
+        }
+        p++;
+    }
+    return p;
+}
+
 internal u32 find_line_index(rained_buffer *buffer, u32 p)
 {
     u32 line_index = 0;
@@ -1140,6 +1154,94 @@ internal void draw_tile(draw_context *ctx, rained_tile *tile, b32 is_focused, f3
     }
 }
 
+internal void carets_delete_a_character_or_selection(rained_view *view)
+{
+    text_edit_delete delete = 
+    {
+        .lengths = arena_push(global_state.frame_arena, sizeof(u32) * view->num_carets, 8)
+    };
+    for(u32 j = 0; j < view->num_carets; j++)
+    {
+        caret *caret = &view->carets[j];
+        u32 length = 0;
+        if(caret->selection_active)
+        {
+            if(caret->position > caret->selection_pos)
+            {
+                length = caret->position - caret->selection_pos;
+            }
+            else
+            {
+                length = caret->selection_pos - caret->position;
+                caret->position = caret->selection_pos;
+            }
+        }
+        delete.lengths[j] = max(1, length);
+        caret->selection_active = 0;
+    }
+    carets_remove_characters(view, delete, 1);
+}
+
+internal void carets_insert_or_replace_selection(rained_view *view, text_edit_insert insert, b32 write_undo)
+{
+    text_edit_delete delete = 
+    {
+        .lengths = arena_push(global_state.frame_arena, sizeof(u32) * view->num_carets, 8)
+    };
+    b32 do_delete = 0;
+    for(u32 j = 0; j < view->num_carets; j++)
+    {
+        caret *caret = &view->carets[j];
+        u32 length = 0;
+        if(caret->selection_active)
+        {
+            if(caret->position > caret->selection_pos)
+            {
+                length = caret->position - caret->selection_pos;
+            }
+            else
+            {
+                length = caret->selection_pos - caret->position;
+                caret->position = caret->selection_pos;
+            }
+        }
+        delete.lengths[j] = length;
+        do_delete |= length;
+        caret->selection_active = 0;
+    }
+    if(do_delete)
+    {
+        carets_remove_characters(view, delete, write_undo);
+    }
+    carets_insert_characters(view, insert, write_undo);
+}
+
+
+typedef struct
+{
+    u32 start, length;
+} copy_cut_range;
+
+internal copy_cut_range *carets_get_copy_or_cut_ranges(rained_view *view, arena *arena)
+{
+    copy_cut_range *res = arena_push(arena, sizeof(copy_cut_range) * view->num_carets, 8);
+    for(u32 i = 0; i < view->num_carets; i++)
+    {
+        caret caret = view->carets[i];
+        if(caret.selection_active)
+        {
+            res[i].start = min(caret.position, caret.selection_pos);
+            res[i].length = max(caret.position, caret.selection_pos) - res[i].start;
+        }
+        else
+        {
+            res[i].start = find_line_start(view->buffer, caret.position);
+            res[i].length = find_line_end(view->buffer, res[i].start) - res[i].start;
+        }
+    }
+    return res;
+}
+
 #include "rained_clang.c"
 
 internal renderer_command *draw(rained_input *input)
@@ -1264,46 +1366,73 @@ internal renderer_command *draw(rained_input *input)
                         global_state.focused_tile->view->fit_caret = 1;
                     }
                 }
+                else if(e.code == ('C' | MODIFIER_CTRL))
+                {
+                    copy_cut_range *ranges = carets_get_copy_or_cut_ranges(view, global_state.frame_arena);
+                    u32 size = 0;
+                    char *text = arena_head(global_state.frame_arena);
+                    for(u32 i = 0; i < view->num_carets; i++)
+                    {
+                        copy_cut_range range = ranges[i];
+                        memcpy(arena_push_noalign(global_state.frame_arena, range.length), view->buffer->text + range.start, range.length);
+                        size += range.length;
+                    }
+                    os_clipboard_set((string) 
+                    {
+                        .p = text,
+                        .length = size,
+                    });
+                }
+                else if(e.code == ('X' | MODIFIER_CTRL))
+                {
+                    copy_cut_range *ranges = carets_get_copy_or_cut_ranges(view, global_state.frame_arena);
+                    u32 size = 0;
+                    char *text = arena_head(global_state.frame_arena);
+                    for(u32 i = 0; i < view->num_carets; i++)
+                    {
+                        copy_cut_range range = ranges[i];
+                        memcpy(arena_push_noalign(global_state.frame_arena, range.length), view->buffer->text + range.start, range.length);
+                        size += range.length;
+                    }
+                    os_clipboard_set((string) 
+                    {
+                        .p = text,
+                        .length = size,
+                    });
+
+                    text_edit_delete delete = 
+                    {
+                        .lengths = arena_push(global_state.frame_arena, sizeof(u32) * view->num_carets, 8)
+                    };                
+                    for(u32 i = 0; i < view->num_carets; i++)
+                    {
+                        delete.lengths[i] = ranges[i].length;
+                        view->carets[i].position = ranges[i].start + ranges[i].length;
+                        view->carets[i].selection_active = 0;
+                    }
+                    carets_remove_characters(view, delete, 1);
+                }
+                else if(e.code == ('V' | MODIFIER_CTRL))
+                {
+                    string to_paste = os_clipboard_get(global_state.frame_arena);
+                    text_edit_insert insert = 
+                    {
+                        .strings = arena_push(global_state.frame_arena, sizeof(string) * view->num_carets, 8)
+                    };
+                    for(u32 j = 0; j < view->num_carets; j++)
+                    {
+                        insert.strings[j] = to_paste;
+                    }
+                    carets_insert_or_replace_selection(view, insert, 1);
+                }
             }
-        }
+        }        
 
         if(e.type == INPUT_EVENT_TEXT)
         {
-            if((e.character > 31 && e.character != '`') || e.character == '\b')
+            if(e.character == '\b')
             {
-                text_edit_delete delete = 
-                {
-                    .lengths = arena_push(global_state.frame_arena, sizeof(u32) * view->num_carets, 8)
-                };
-                b32 do_delete = 0;
-                for(u32 j = 0; j < view->num_carets; j++)
-                {
-                    caret *caret = &view->carets[j];
-                    u32 length = 0;
-                    if(caret->selection_active)
-                    {
-                        if(caret->position > caret->selection_pos)
-                        {
-                            length = caret->position - caret->selection_pos;
-                        }
-                        else
-                        {
-                            length = caret->selection_pos - caret->position;
-                            caret->position = caret->selection_pos;
-                        }
-                    }
-                    else if(e.code == '\b')
-                    {
-                        length = max(length, 1);
-                    }
-                    delete.lengths[j] = length;
-                    do_delete |= length;
-                    caret->selection_active = 0;
-                }
-                if(do_delete)
-                {
-                    carets_remove_characters(view, delete, 1);
-                }
+                carets_delete_a_character_or_selection(view);
             }
 
             if(e.character > 31 && e.character != '`') // i've lost my enter key
@@ -1320,7 +1449,7 @@ internal renderer_command *draw(rained_input *input)
                         .length = 1
                     };
                 }
-                carets_insert_characters(view, insert, 1);
+                carets_insert_or_replace_selection(view, insert, 1);
             }
             else if(e.character == '\r')
             {
@@ -1337,7 +1466,7 @@ internal renderer_command *draw(rained_input *input)
                         .length = 2
                     };
                 }
-                carets_insert_characters(view, insert, 1);
+                carets_insert_or_replace_selection(view, insert, 1);
             }
         }
 

@@ -286,7 +286,16 @@ internal void caret_move_left(rained_view *view, caret *caret)
         }
     }
     caret->wish_column = caret_get_column(view, caret);
-    
+}
+
+internal void caret_move_next_word(rained_view *view, caret *caret)
+{
+
+}
+
+internal void caret_move_prev_word(rained_view *view, caret *caret)
+{
+
 }
 
 internal void caret_move_to_prev_line(rained_buffer *buffer, caret *caret)
@@ -475,7 +484,7 @@ internal void carets_remove_characters(rained_view *view, text_edit_delete delet
             e->strings[c].length = num_to_remove;
         }
         offset += num_to_remove;
-        for(u32 i = caret->position - num_to_remove; i < view->buffer->text_size; i++)
+        for(u32 i = caret->position - num_to_remove; i < view->buffer->text_size - num_to_remove; i++)
         {
             view->buffer->text[i] = view->buffer->text[i + num_to_remove];
         }
@@ -1093,7 +1102,14 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
         for(u32 k = 0; k < view->num_carets; k++)
         {
             caret *caret = &view->carets[k];
-
+            
+            if(view->line_index + l->line_index == caret_lines[k])
+            {
+                for(u32 j = 0; j < view->width_cells; j++)
+                {
+                    cells[y * view->width_cells + j].bg_color = caret_line_color;
+                }
+            }
             if(caret->selection_active)
             {
                 u32 start = max(l->pos_in_text, min(caret->position, caret->selection_pos));
@@ -1101,13 +1117,6 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
                 for(u32 j = start; j < end; j++)
                 {
                     cells[y * view->width_cells + j - l->pos_in_text].bg_color = selection_color;
-                }
-            }
-            else if(view->line_index + l->line_index == caret_lines[k])
-            {
-                for(u32 j = 0; j < view->width_cells; j++)
-                {
-                    cells[y * view->width_cells + j].bg_color = caret_line_color;
                 }
             }
         }
@@ -1270,12 +1279,15 @@ internal renderer_command *draw(rained_input *input)
     {
         input_event e = input->input_queue[i];
 
-        if(e.is_down && e.code == (KEY_SHIFT | MODIFIER_SHIFT))
+        if(e.is_down && (u8)e.code == KEY_SHIFT)
         {
             for(u32 i = 0; i < view->num_carets; i++)
             {
-                view->carets[i].selection_pos = view->carets[i].position;
-                view->carets[i].selection_active = 1;
+                if(!view->carets[i].selection_active)
+                {
+                    view->carets[i].selection_pos = view->carets[i].position;
+                    view->carets[i].selection_active = 1;
+                }
             }
         }
 
@@ -1500,6 +1512,48 @@ internal renderer_command *draw(rained_input *input)
                         caret_move_up_chopped(view, caret);
                         view->fit_caret = 1;
                         caret->selection_active = (e.code & MODIFIER_SHIFT);
+                    }
+                    else if(e.code == (KEY_LEFT | MODIFIER_CTRL | MODIFIER_ALT) || e.code == (KEY_LEFT | MODIFIER_CTRL | MODIFIER_ALT | MODIFIER_SHIFT))
+                    {
+                        caret->position = find_line_start(view->buffer, caret->position);
+                        caret->wish_column = caret_get_column(view, caret);
+                        view->fit_caret = 1;
+                    }
+                    else if(e.code == (KEY_RIGHT | MODIFIER_CTRL | MODIFIER_ALT) || e.code == (KEY_RIGHT | MODIFIER_CTRL | MODIFIER_ALT | MODIFIER_SHIFT))
+                    {
+                        caret->position = find_line_end(view->buffer, caret->position);
+                        caret->wish_column = caret_get_column(view, caret);
+                        view->fit_caret = 1;
+                    }
+                    else if(e.code == (KEY_RIGHT | MODIFIER_CTRL))
+                    {
+                        caret_move_next_word(view, caret);
+                    }
+                    else if(e.code == (KEY_LEFT | MODIFIER_CTRL))
+                    {
+                        caret_move_prev_word(view, caret);
+                    }
+                    else if(e.code == KEY_HOME)
+                    {
+                        caret->position = 0;
+                        view->fit_caret = 1;
+                    }
+                    else if(e.code == KEY_END)
+                    {
+                        caret->position = view->buffer->text_size;
+                        view->fit_caret = 1;
+                    }
+                    else if(e.code == KEY_PAGEDOWN)
+                    {
+                    #if 0 
+                        chopped_line_list l = chop_lines(view->buffer, view->width_cells, caret->position, view->height_cells - 2, -1, global_state.frame_arena);
+                        caret->position = l.lines[l.count - 1].pos_in_text;
+                        view->fit_caret = 1;
+                    #endif
+                    }
+                    else if(e.code == KEY_PAGEUP)
+                    {
+                        
                     }
                 }
             }

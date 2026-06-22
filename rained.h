@@ -168,6 +168,10 @@ typedef enum KEY_CODE
     KEY_CTRL = 0x11,
     KEY_ALT = 0x12,
     KEY_ENTER = 0x0D,
+    KEY_PAGEUP = 0x21,
+    KEY_PAGEDOWN = 0x22,
+    KEY_END = 0x23,
+    KEY_HOME = 0x24,
     KEY_LEFT = 0x25,
     KEY_UP = 0x26,
     KEY_RIGHT = 0x27,
@@ -190,6 +194,7 @@ typedef enum KEY_CODE
     KEY_MINUS = 0xBD,
     KEY_PERIOD = 0xBE,
     KEY_THE_ONE_RIGHT_BELOW_ESCAPE = 0xC0,
+    
     
 } KEY_CODE;
 

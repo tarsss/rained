@@ -5,6 +5,7 @@
 #include <d3d11.h>
 #include <dxgi1_3.h>
 #include <dxgidebug.h>
+#include "cdwrite.h"
 #include "shader.h"
 
 HWND                        window;
@@ -538,8 +539,95 @@ void __stdcall WinMainCRTStartup()
     ID3D11DeviceContext_CSSetShader(device_context, shader, 0, 0);
 
     arena_t *scratch = arena_alloc(gb(1), mb(1));
+
+    ID3D11ShaderResourceView *font_texture_srv;
+
+#if 0
     loaded_bitmap font_bitmap = load_bitmap("font.bmp", scratch);
-    ID3D11ShaderResourceView *font_texture_srv = d3d11_upload_bitmap(font_bitmap);
+    font_texture_srv = d3d11_upload_bitmap(font_bitmap);
+#else
+{
+    IDWriteFactory *factory;
+    DWriteCreateFactory(DWRITE_FACTORY_TYPE_ISOLATED, &IID_IDWriteFactory, (void**)&factory);
+
+    IDWriteFontCollection *font_collection;
+    IDWriteFactory_GetSystemFontCollection(factory, &font_collection, FALSE);
+    
+    u32 font_family_index;
+    b32 sneed;
+    IDWriteFontCollection_FindFamilyName(font_collection, L"consolas", &font_family_index, &sneed);
+    
+    IDWriteFontFamily *font_family;
+    assert_hr(IDWriteFontCollection_GetFontFamily(font_collection, font_family_index, &font_family));
+    
+    IDWriteFont *font;
+    assert_hr(IDWriteFontFamily_GetFirstMatchingFont(font_family, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, &font));
+    
+    IDWriteFontFace *font_face;
+    assert_hr(IDWriteFont_CreateFontFace(font, &font_face));
+
+    IDWriteGdiInterop *gdi_interop;
+    IDWriteFactory_GetGdiInterop(factory, &gdi_interop);
+
+    IDWriteBitmapRenderTarget *bitmap_render_target;
+    assert_hr(IDWriteGdiInterop_CreateBitmapRenderTarget(gdi_interop, 0, 256, 256, &bitmap_render_target));
+    IDWriteBitmapRenderTarget_SetPixelsPerDip(bitmap_render_target, 1.0f);
+    
+    u32 glyph_count = 127 - 33;
+    u16 *glyph_indices = arena_push(scratch, sizeof(u16) * glyph_count, 8);
+    f32 *glyph_advances = arena_push(scratch, sizeof(f32) * glyph_count, 8);
+    DWRITE_GLYPH_OFFSET *glyph_offsets = arena_push(scratch, sizeof(DWRITE_GLYPH_OFFSET) * glyph_count, 8);
+    for(u32 i = 0; i < glyph_count; i++)
+    {
+        u32 cp = 33 + i;
+        hr = IDWriteFontFace_GetGlyphIndices(font_face, &cp, 1, glyph_indices + i);
+        assert_hr(hr);
+        glyph_advances[i] = 0.0f;
+        u32 width = 14;
+        u32 height = 7;
+        glyph_offsets[i] = (DWRITE_GLYPH_OFFSET)
+        {
+            .advanceOffset = i % width * 14.0f,
+            .ascenderOffset = -(14.0f + i / width * 14.0f),
+        };
+    }
+    
+    DWRITE_GLYPH_RUN glyph_run = 
+    {
+        .fontFace = font_face,
+        .fontEmSize = 14.0f,
+        .glyphCount = glyph_count,
+        .glyphIndices = glyph_indices,
+        .glyphAdvances = glyph_advances,
+        .glyphOffsets = glyph_offsets,
+        .isSideways = 0,
+        .bidiLevel = 0,
+    };
+    IDWriteRenderingParams *params;
+    IDWriteFactory_CreateRenderingParams(factory, &params);
+    //IDWriteFactory_CreateCustomRenderingParams();
+    
+    HRESULT hr;
+    hr = IDWriteBitmapRenderTarget_DrawGlyphRun(bitmap_render_target, 0, 0, DWRITE_MEASURING_MODE_NATURAL, &glyph_run, params, 0xFFFFFFFF, 0);
+    assert_hr(hr);
+
+    HDC dc = IDWriteBitmapRenderTarget_GetMemoryDC(bitmap_render_target);
+    HBITMAP bitmap = GetCurrentObject(dc, OBJ_BITMAP);
+    DIBSECTION dib;
+    GetObject(bitmap, sizeof(dib), &dib);
+
+    loaded_bitmap lb;
+    lb.data = dib.dsBm.bmBits;
+    bitmap_header bh = (bitmap_header)
+    {
+        .Width = dib.dsBm.bmWidth,
+        .Height = dib.dsBm.bmHeight
+    };
+    lb.header = &bh;
+    font_texture_srv = d3d11_upload_bitmap(lb);
+}
+#endif
+
     arena_reset(scratch);
 
     ID3D11DeviceContext_CSSetShaderResources(device_context, 0, 1, &font_texture_srv);
@@ -547,7 +635,7 @@ void __stdcall WinMainCRTStartup()
     ID3D11SamplerState *sampler_state;
     D3D11_SAMPLER_DESC sdesc =
     {
-        .Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR,
+        .Filter = D3D11_FILTER_MIN_MAG_MIP_POINT,
         .AddressU = D3D11_TEXTURE_ADDRESS_CLAMP,
         .AddressV = D3D11_TEXTURE_ADDRESS_CLAMP,
         .AddressW = D3D11_TEXTURE_ADDRESS_CLAMP,

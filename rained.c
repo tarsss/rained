@@ -1,5 +1,8 @@
 #include "rained.h"
 
+u32 cell_width;
+u32 cell_height = 17;
+
 typedef struct rained_clang_state rained_clang_state;
 
 typedef struct
@@ -948,9 +951,6 @@ internal void caret_move_up_chopped(rained_view *view, caret *caret)
 
 internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount, b32 is_focused)
 {
-    u32 cell_width = 8;
-    u32 cell_height = 18;
-
     view->width_cells = (ctx->rect.max_x - ctx->rect.min_x + cell_width - 1) / cell_width;
     view->height_cells = (ctx->rect.max_y - ctx->rect.min_y + cell_height - 1) / cell_height + 1;
 
@@ -1093,7 +1093,7 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
 
             cells[cell_index] = (cell) 
             { 
-                .atlas_index = c - 33,
+                .atlas_index = c - 32,
                 .text_color = text_color,
                 .bg_color = bg_color,
             };
@@ -1142,8 +1142,6 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
         {
             .rect = ctx->rect,
             .cells = cells,
-            .cell_width = cell_width,
-            .cell_height = cell_height,
             .num_cells_x = view->width_cells,
             .num_cells_y = view->height_cells,
             .atlas_width_characters_x = 14,

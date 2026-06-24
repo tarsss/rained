@@ -36,12 +36,13 @@ uint get_cell_index(int2 pos)
     return cell_pos.x + cell_pos.y * num_cells_x;
 }
 
-float3 unpack_color(int rgba)
+float4 unpack_color(int rgba)
 {
     float r = (rgba & 0x000000FF);
     float g = (rgba & 0x0000FF00) >> 8;
     float b = (rgba & 0x00FF0000) >> 16;
-    return float3(r,g,b) / 255.0f;
+    float a = (rgba & 0xFF000000) >> 24;
+    return float4(r,g,b,a) / 255.0f;
 }
 
 [numthreads(8,8,1)]
@@ -76,30 +77,21 @@ void shader_cs(int2 thread_id : SV_DispatchThreadID)
     uint2 offset_pixel_pos = thread_id;
     offset_pixel_pos.y += view_offset_pixels;
     
-    // todo: once we do proper atlas generation, there will be 1:1 match in pixel/texel sizes and you won't have to remap, simple integer math instead
     uint cell_index = get_cell_index(offset_pixel_pos);
     cell c = cells[cell_index];
 
-    float3 text_color = unpack_color(c.text_color);
-    float3 bg_color = unpack_color(c.bg_color);
+    float4 text_color = unpack_color(c.text_color);
+    float4 bg_color = unpack_color(c.bg_color);
 
     if(c.index == 0)
     {
-        output[pixel_pos] = float4(bg_color,1);
+        output[pixel_pos] = bg_color;
         return;
     }
 
-    float2 atlas_character_pos = float2(c.index % atlas_width_characters_x, c.index / atlas_width_characters_x);
-    float2 atlas_character_uv = atlas_character_pos / float2(atlas_width_characters_x, atlas_height_characters_y);
-    float2 character_uv = (offset_pixel_pos % uint2(cell_width, cell_height)) / float2(cell_width, cell_height);
-    float2 uv = atlas_character_uv + character_uv / float2(atlas_width_characters_x, atlas_height_characters_y);
-
-    // note: our texture is flipped! you better just flip it on load instead of messing up with spaces.
-    uv.y = 1.0f - uv.y;
-
-    float tex = atlas.SampleLevel(atlas_sampler, uv, 1).x;
-    tex = tex > 0.3f ? 1.0f : 0.0f; // todo note removeme
-    output[pixel_pos] = float4(lerp(bg_color, text_color, tex), 1);
+    int2 atlas_character_pos = int2(c.index % atlas_width_characters_x * cell_width, c.index / atlas_width_characters_x * cell_height);
+    int2 atlas_pos = atlas_character_pos + offset_pixel_pos % int2(cell_width, cell_height);
+    float4 tex = atlas.Load(int3(atlas_pos, 0), int2(0,0));
     
-    //output[pixel_pos] = atlas.SampleLevel(atlas_sampler, uv, 1) * float4(text_color, 1);
+    output[pixel_pos] = lerp(bg_color, text_color, tex);
 }

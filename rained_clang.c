@@ -65,7 +65,7 @@ internal b32 rained_clang_find_definition(rained_clang_state *state, rained_buff
     u32 def_pos;
     clang_getFileLocation(def_loc, &def_file, 0, 0, position);
     CXString cxstr = clang_getFileName(def_file);
-    *file_path = arena_push_cstring(arena, clang_getCString(cxstr));
+    *file_path = arena_push_cstring(arena, (char*)clang_getCString(cxstr));
     clang_disposeString(cxstr);
     return 1;
 }

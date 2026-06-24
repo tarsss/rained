@@ -298,34 +298,6 @@ LRESULT window_callback(HWND window,
     return result;
 }
 
-internal ID3D11ShaderResourceView *d3d11_upload_bitmap(loaded_bitmap bitmap)
-{
-    ID3D11ShaderResourceView* texture_view;
-    D3D11_TEXTURE2D_DESC texture_desc =
-    {
-        .Width = bitmap.header->Width,
-        .Height = bitmap.header->Width,
-        .MipLevels = 1,
-        .ArraySize = 1,
-        .Format = DXGI_FORMAT_R8G8B8A8_UNORM,
-        .SampleDesc = { 1, 0 },
-        .Usage = D3D11_USAGE_IMMUTABLE,
-        .BindFlags = D3D11_BIND_SHADER_RESOURCE,
-    };
-
-    D3D11_SUBRESOURCE_DATA texture_data =
-    {
-        .pSysMem = bitmap.data,
-        .SysMemPitch = bitmap.header->Height * sizeof(u32),
-    };
-
-    ID3D11Texture2D* texture;
-    ID3D11Device_CreateTexture2D(device, &texture_desc, &texture_data, &texture);
-    ID3D11Device_CreateShaderResourceView(device, (ID3D11Resource*)texture, NULL, &texture_view);
-    ID3D11Texture2D_Release(texture);
-    return texture_view;
-}
-
 internal void resize_swapchain()
 {
     if(rt_view)
@@ -542,13 +514,9 @@ void __stdcall WinMainCRTStartup()
 
     ID3D11ShaderResourceView *font_texture_srv;
 
-#if 0
-    loaded_bitmap font_bitmap = load_bitmap("font.bmp", scratch);
-    font_texture_srv = d3d11_upload_bitmap(font_bitmap);
-#else
 {
     IDWriteFactory *factory;
-    DWriteCreateFactory(DWRITE_FACTORY_TYPE_ISOLATED, &IID_IDWriteFactory, (void**)&factory);
+    DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, &IID_IDWriteFactory, (void**)&factory);
 
     IDWriteFontCollection *font_collection;
     IDWriteFactory_GetSystemFontCollection(factory, &font_collection, FALSE);
@@ -571,31 +539,52 @@ void __stdcall WinMainCRTStartup()
 
     IDWriteBitmapRenderTarget *bitmap_render_target;
     assert_hr(IDWriteGdiInterop_CreateBitmapRenderTarget(gdi_interop, 0, 256, 256, &bitmap_render_target));
-    IDWriteBitmapRenderTarget_SetPixelsPerDip(bitmap_render_target, 1.0f);
-    
-    u32 glyph_count = 127 - 33;
+    //IDWriteBitmapRenderTarget_SetPixelsPerDip(bitmap_render_target, 1.0f);
+
+    u32 glyph_count = 127 - 32;
     u16 *glyph_indices = arena_push(scratch, sizeof(u16) * glyph_count, 8);
-    f32 *glyph_advances = arena_push(scratch, sizeof(f32) * glyph_count, 8);
-    DWRITE_GLYPH_OFFSET *glyph_offsets = arena_push(scratch, sizeof(DWRITE_GLYPH_OFFSET) * glyph_count, 8);
     for(u32 i = 0; i < glyph_count; i++)
     {
-        u32 cp = 33 + i;
+        u32 cp = 32 + i;
         hr = IDWriteFontFace_GetGlyphIndices(font_face, &cp, 1, glyph_indices + i);
         assert_hr(hr);
+    }
+    
+    DWRITE_FONT_METRICS font_face_metrics;
+    IDWriteFontFace_GetMetrics(font_face, &font_face_metrics);
+    DWRITE_GLYPH_METRICS *glyph_metrics = arena_push(scratch, sizeof(DWRITE_GLYPH_METRICS) * glyph_count, 8);
+    hr = IDWriteFontFace_GetDesignGlyphMetrics(font_face, glyph_indices, glyph_count, glyph_metrics, 0);
+    assert_hr(hr);
+    #define dips_from_pixels(p) (p * 96.0f / 72.0f)
+    hr = IDWriteFontFace_GetGdiCompatibleGlyphMetrics(font_face, dips_from_pixels(cell_height), 1.0f, 0, FALSE, glyph_indices, glyph_count, glyph_metrics, 0);
+    assert_hr(hr);
+    
+    DWRITE_GLYPH_OFFSET *glyph_offsets = arena_push(scratch, sizeof(DWRITE_GLYPH_OFFSET) * glyph_count, 8);
+    f32 *glyph_advances = arena_push(scratch, sizeof(f32) * glyph_count, 8);
+
+    f32 height = (font_face_metrics.ascent + font_face_metrics.descent + font_face_metrics.lineGap) * cell_height / font_face_metrics.designUnitsPerEm;
+    f32 mul = cell_height / height;
+    cell_width = (f32)glyph_metrics[0].advanceWidth / font_face_metrics.designUnitsPerEm * cell_height;
+
+    for(u32 i = 0; i < glyph_count; i++)
+    {
         glyph_advances[i] = 0.0f;
         u32 width = 14;
         u32 height = 7;
+
+        f32 a = font_face_metrics.ascent * cell_height / font_face_metrics.designUnitsPerEm * mul;
+        f32 b = i / width * cell_height;
         glyph_offsets[i] = (DWRITE_GLYPH_OFFSET)
         {
-            .advanceOffset = i % width * 14.0f,
-            .ascenderOffset = -(14.0f + i / width * 14.0f),
+            .advanceOffset = i % width * cell_width,
+            .ascenderOffset = -b + -a
         };
     }
-    
+
     DWRITE_GLYPH_RUN glyph_run = 
     {
         .fontFace = font_face,
-        .fontEmSize = 14.0f,
+        .fontEmSize = cell_height * mul,
         .glyphCount = glyph_count,
         .glyphIndices = glyph_indices,
         .glyphAdvances = glyph_advances,
@@ -616,17 +605,31 @@ void __stdcall WinMainCRTStartup()
     DIBSECTION dib;
     GetObject(bitmap, sizeof(dib), &dib);
 
-    loaded_bitmap lb;
-    lb.data = dib.dsBm.bmBits;
-    bitmap_header bh = (bitmap_header)
+    ID3D11ShaderResourceView* texture_view;
+    D3D11_TEXTURE2D_DESC texture_desc =
     {
         .Width = dib.dsBm.bmWidth,
-        .Height = dib.dsBm.bmHeight
+        .Height = dib.dsBm.bmHeight,
+        .MipLevels = 1,
+        .ArraySize = 1,
+        .Format = DXGI_FORMAT_B8G8R8A8_UNORM,
+        .SampleDesc = { 1, 0 },
+        .Usage = D3D11_USAGE_IMMUTABLE,
+        .BindFlags = D3D11_BIND_SHADER_RESOURCE,
     };
-    lb.header = &bh;
-    font_texture_srv = d3d11_upload_bitmap(lb);
+
+    D3D11_SUBRESOURCE_DATA texture_data =
+    {
+        .pSysMem = dib.dsBm.bmBits,
+        .SysMemPitch = dib.dsBm.bmHeight * sizeof(u32),
+    };
+
+    ID3D11Texture2D* texture;
+    ID3D11Device_CreateTexture2D(device, &texture_desc, &texture_data, &texture);
+    ID3D11Device_CreateShaderResourceView(device, (ID3D11Resource*)texture, NULL, &font_texture_srv);
+    ID3D11Texture2D_Release(texture);
+
 }
-#endif
 
     arena_reset(scratch);
 
@@ -676,7 +679,7 @@ void __stdcall WinMainCRTStartup()
 
     ID3D11DeviceContext_CSSetConstantBuffers(device_context, 0, 1, &d3d11_cbuffer);
 
-    ID3D11Buffer *cell_buffer;
+    ID3D11Buffer *cell_buffer = 0;
     ID3D11ShaderResourceView *cell_buffer_srv;
 
     PROFILE_END();
@@ -783,8 +786,8 @@ void __stdcall WinMainCRTStartup()
                 .rect_min_y = cmd->code_view.rect.min_y,
                 .rect_max_x = cmd->code_view.rect.max_x,
                 .rect_max_y = cmd->code_view.rect.max_y,
-                .cell_width = cmd->code_view.cell_width,
-                .cell_height = cmd->code_view.cell_height,
+                .cell_width = cell_width,
+                .cell_height = cell_height,
                 .num_cells_x = cmd->code_view.num_cells_x,
                 .num_cells_y = cmd->code_view.num_cells_y,
                 .atlas_width_characters_x = cmd->code_view.atlas_width_characters_x,

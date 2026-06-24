@@ -296,8 +296,6 @@ struct renderer_command
     {
         rect rect;
         cell *cells;
-        u32 cell_width;
-        u32 cell_height;
         u32 num_cells_x;
         u32 num_cells_y;
         u32 atlas_width_characters_x;

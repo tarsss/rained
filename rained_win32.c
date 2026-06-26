@@ -193,6 +193,154 @@ internal void os_clipboard_set(string text)
     }
 }
 
+typedef struct
+{
+    IDWriteFactory          *factory;
+    IDWriteFactory2         *factory2;
+    IDWriteFontCollection   *font_collection;
+    IDWriteGdiInterop       *gdi_interop;
+
+    IDWriteRenderingParams  *params;
+
+    IDWriteFontFamily       *font_family;
+    IDWriteFont             *font;
+    IDWriteFontFace         *font_face;
+
+} dwrite_state_t;
+
+dwrite_state_t dwrite_state;
+
+internal void os_release_font_atlas(font_atlas atlas)
+{
+    if(atlas.os_handle.stuff[0])
+    {
+        ID3D11Texture2D_Release((ID3D11Texture2D *)atlas.os_handle.stuff[0]);
+        ID3D11ShaderResourceView_Release((ID3D11ShaderResourceView *)atlas.os_handle.stuff[1]);
+    }
+}
+
+internal void dwrite_init()
+{
+    HRESULT hr = 0;
+    DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, &IID_IDWriteFactory, (void**)&dwrite_state.factory);
+    DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, &IID_IDWriteFactory2, (void**)&dwrite_state.factory2);
+    IDWriteFactory_GetSystemFontCollection(dwrite_state.factory, &dwrite_state.font_collection, FALSE);
+    u32 font_family_index;
+    b32 sneed;
+    IDWriteFontCollection_FindFamilyName(dwrite_state.font_collection, L"consolas", &font_family_index, &sneed);
+    hr = IDWriteFontCollection_GetFontFamily(dwrite_state.font_collection, font_family_index, &dwrite_state.font_family);
+    hr = IDWriteFontFamily_GetFirstMatchingFont(dwrite_state.font_family, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, &dwrite_state.font);
+    hr = IDWriteFont_CreateFontFace(dwrite_state.font, &dwrite_state.font_face);    
+    IDWriteFactory_GetGdiInterop(dwrite_state.factory, &dwrite_state.gdi_interop);
+
+    IDWriteRenderingParams *default_params;
+    IDWriteFactory_CreateRenderingParams(dwrite_state.factory, &default_params);
+    
+    f32 gamma = IDWriteRenderingParams_GetGamma(default_params);
+    f32 enhanced_contrast = IDWriteRenderingParams_GetEnhancedContrast(default_params);
+    f32 cleartype_level = IDWriteRenderingParams_GetClearTypeLevel(default_params);
+    
+    IDWriteFactory2_CreateCustomRenderingParams2(dwrite_state.factory2, gamma, enhanced_contrast, enhanced_contrast, cleartype_level, DWRITE_PIXEL_GEOMETRY_RGB, DWRITE_RENDERING_MODE_GDI_NATURAL, DWRITE_GRID_FIT_MODE_ENABLED, (IDWriteRenderingParams2 **)&dwrite_state.params);
+}
+
+internal font_atlas os_make_font_atlas(u32 size, arena *scratch)
+{
+    HRESULT hr = 0;
+
+    font_atlas result = { 0 };
+
+    result.size = size;
+    result.glyph_height = size;
+    
+    u32 glyph_count = 127 - 32;
+    u16 *glyph_indices = arena_push(scratch, sizeof(u16) * glyph_count, 8);
+    for(u32 i = 0; i < glyph_count; i++)
+    {
+        u32 cp = 32 + i;
+        hr = IDWriteFontFace_GetGlyphIndices(dwrite_state.font_face, &cp, 1, glyph_indices + i);
+    }
+    
+    DWRITE_FONT_METRICS font_face_metrics;
+    IDWriteFontFace_GetMetrics(dwrite_state.font_face, &font_face_metrics);
+    DWRITE_GLYPH_METRICS *glyph_metrics = arena_push(scratch, sizeof(DWRITE_GLYPH_METRICS) * glyph_count, 8);
+    hr = IDWriteFontFace_GetDesignGlyphMetrics(dwrite_state.font_face, glyph_indices, glyph_count, glyph_metrics, 0);
+    #define dips_from_pixels(p) (p * 96.0f / 72.0f)
+    hr = IDWriteFontFace_GetGdiCompatibleGlyphMetrics(dwrite_state.font_face, dips_from_pixels(result.glyph_height), 1.0f, 0, FALSE, glyph_indices, glyph_count, glyph_metrics, 0);
+    
+    DWRITE_GLYPH_OFFSET *glyph_offsets = arena_push(scratch, sizeof(DWRITE_GLYPH_OFFSET) * glyph_count, 8);
+    f32 *glyph_advances = arena_push(scratch, sizeof(f32) * glyph_count, 8);
+
+    f32 height = (font_face_metrics.ascent + font_face_metrics.descent + font_face_metrics.lineGap) * result.glyph_height / font_face_metrics.designUnitsPerEm;
+    f32 mul = result.glyph_height / height;
+    
+    result.glyph_width = (f32)glyph_metrics[0].advanceWidth / font_face_metrics.designUnitsPerEm * result.glyph_height;
+
+    u32 atlas_width_glyphs = 14;
+    u32 atlas_heiht_glyphs = 7;
+
+    result.atlas_width_glyphs = atlas_width_glyphs;
+
+    for(u32 i = 0; i < glyph_count; i++)
+    {
+        glyph_advances[i] = 0.0f;
+
+        f32 a = font_face_metrics.ascent * result.glyph_height / font_face_metrics.designUnitsPerEm * mul;
+        f32 b = i / atlas_width_glyphs * result.glyph_height;
+        glyph_offsets[i] = (DWRITE_GLYPH_OFFSET)
+        {
+            .advanceOffset = i % atlas_width_glyphs * result.glyph_width,
+            .ascenderOffset = -b + -a
+        };
+    }
+
+    u32 atlas_width_pixels = 256;
+    u32 atlas_height_pixels = 256;
+
+    IDWriteBitmapRenderTarget *bitmap_render_target;
+    hr = IDWriteGdiInterop_CreateBitmapRenderTarget(dwrite_state.gdi_interop, 0, atlas_width_pixels, atlas_height_pixels, &bitmap_render_target);
+
+    DWRITE_GLYPH_RUN glyph_run = 
+    {
+        .fontFace = dwrite_state.font_face,
+        .fontEmSize = result.glyph_height * mul,
+        .glyphCount = glyph_count,
+        .glyphIndices = glyph_indices,
+        .glyphAdvances = glyph_advances,
+        .glyphOffsets = glyph_offsets,
+        .isSideways = 0,
+        .bidiLevel = 0,
+    };
+    
+    hr = IDWriteBitmapRenderTarget_DrawGlyphRun(bitmap_render_target, 0, 0, DWRITE_MEASURING_MODE_GDI_NATURAL, &glyph_run, dwrite_state.params, 0xFFFFFFFF, 0);
+
+    HDC dc = IDWriteBitmapRenderTarget_GetMemoryDC(bitmap_render_target);
+    HBITMAP bitmap = GetCurrentObject(dc, OBJ_BITMAP);
+    DIBSECTION dib;
+    GetObject(bitmap, sizeof(dib), &dib);
+
+    D3D11_TEXTURE2D_DESC texture_desc =
+    {
+        .Width = dib.dsBm.bmWidth,
+        .Height = dib.dsBm.bmHeight,
+        .MipLevels = 1,
+        .ArraySize = 1,
+        .Format = DXGI_FORMAT_B8G8R8A8_UNORM,
+        .SampleDesc = { 1, 0 },
+        .Usage = D3D11_USAGE_IMMUTABLE,
+        .BindFlags = D3D11_BIND_SHADER_RESOURCE,
+    };
+
+    D3D11_SUBRESOURCE_DATA texture_data =
+    {
+        .pSysMem = dib.dsBm.bmBits,
+        .SysMemPitch = dib.dsBm.bmHeight * sizeof(u32),
+    };
+
+    ID3D11Device_CreateTexture2D(device, &texture_desc, &texture_data, (ID3D11Texture2D **)&result.os_handle.stuff[0]);
+    ID3D11Device_CreateShaderResourceView(device, (ID3D11Resource*)result.os_handle.stuff[0], NULL, (ID3D11ShaderResourceView **)&result.os_handle.stuff[1]);
+    return result;
+}
+
 static input_event input_queue[128];
 static u32         input_queue_count;
 
@@ -496,13 +644,11 @@ void __stdcall WinMainCRTStartup()
     IDXGIDevice1_SetMaximumFrameLatency(device1, 1);
 #endif
 
-
     // disable silly Alt+Enter changing monitor resolution to match window size
     IDXGIFactory_MakeWindowAssociation(factory, window, DXGI_MWA_NO_ALT_ENTER);
     IDXGIFactory2_Release(factory);
     IDXGIAdapter_Release(dxgiAdapter);
     IDXGIDevice_Release(dxgiDevice);
-
 
     ID3D11ComputeShader *shader;
     hr = ID3D11Device_CreateComputeShader(device, g_shader_cs, lengthof(g_shader_cs), 0, &shader);
@@ -512,128 +658,9 @@ void __stdcall WinMainCRTStartup()
 
     arena_t *scratch = arena_alloc(gb(1), mb(1));
 
-    ID3D11ShaderResourceView *font_texture_srv;
-
-{
-    IDWriteFactory *factory;
-    DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, &IID_IDWriteFactory, (void**)&factory);
-
-    IDWriteFontCollection *font_collection;
-    IDWriteFactory_GetSystemFontCollection(factory, &font_collection, FALSE);
-    
-    u32 font_family_index;
-    b32 sneed;
-    IDWriteFontCollection_FindFamilyName(font_collection, L"consolas", &font_family_index, &sneed);
-    
-    IDWriteFontFamily *font_family;
-    assert_hr(IDWriteFontCollection_GetFontFamily(font_collection, font_family_index, &font_family));
-    
-    IDWriteFont *font;
-    assert_hr(IDWriteFontFamily_GetFirstMatchingFont(font_family, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, &font));
-    
-    IDWriteFontFace *font_face;
-    assert_hr(IDWriteFont_CreateFontFace(font, &font_face));
-
-    IDWriteGdiInterop *gdi_interop;
-    IDWriteFactory_GetGdiInterop(factory, &gdi_interop);
-
-    IDWriteBitmapRenderTarget *bitmap_render_target;
-    assert_hr(IDWriteGdiInterop_CreateBitmapRenderTarget(gdi_interop, 0, 256, 256, &bitmap_render_target));
-    //IDWriteBitmapRenderTarget_SetPixelsPerDip(bitmap_render_target, 1.0f);
-
-    u32 glyph_count = 127 - 32;
-    u16 *glyph_indices = arena_push(scratch, sizeof(u16) * glyph_count, 8);
-    for(u32 i = 0; i < glyph_count; i++)
-    {
-        u32 cp = 32 + i;
-        hr = IDWriteFontFace_GetGlyphIndices(font_face, &cp, 1, glyph_indices + i);
-        assert_hr(hr);
-    }
-    
-    DWRITE_FONT_METRICS font_face_metrics;
-    IDWriteFontFace_GetMetrics(font_face, &font_face_metrics);
-    DWRITE_GLYPH_METRICS *glyph_metrics = arena_push(scratch, sizeof(DWRITE_GLYPH_METRICS) * glyph_count, 8);
-    hr = IDWriteFontFace_GetDesignGlyphMetrics(font_face, glyph_indices, glyph_count, glyph_metrics, 0);
-    assert_hr(hr);
-    #define dips_from_pixels(p) (p * 96.0f / 72.0f)
-    hr = IDWriteFontFace_GetGdiCompatibleGlyphMetrics(font_face, dips_from_pixels(cell_height), 1.0f, 0, FALSE, glyph_indices, glyph_count, glyph_metrics, 0);
-    assert_hr(hr);
-    
-    DWRITE_GLYPH_OFFSET *glyph_offsets = arena_push(scratch, sizeof(DWRITE_GLYPH_OFFSET) * glyph_count, 8);
-    f32 *glyph_advances = arena_push(scratch, sizeof(f32) * glyph_count, 8);
-
-    f32 height = (font_face_metrics.ascent + font_face_metrics.descent + font_face_metrics.lineGap) * cell_height / font_face_metrics.designUnitsPerEm;
-    f32 mul = cell_height / height;
-    cell_width = (f32)glyph_metrics[0].advanceWidth / font_face_metrics.designUnitsPerEm * cell_height;
-
-    for(u32 i = 0; i < glyph_count; i++)
-    {
-        glyph_advances[i] = 0.0f;
-        u32 width = 14;
-        u32 height = 7;
-
-        f32 a = font_face_metrics.ascent * cell_height / font_face_metrics.designUnitsPerEm * mul;
-        f32 b = i / width * cell_height;
-        glyph_offsets[i] = (DWRITE_GLYPH_OFFSET)
-        {
-            .advanceOffset = i % width * cell_width,
-            .ascenderOffset = -b + -a
-        };
-    }
-
-    DWRITE_GLYPH_RUN glyph_run = 
-    {
-        .fontFace = font_face,
-        .fontEmSize = cell_height * mul,
-        .glyphCount = glyph_count,
-        .glyphIndices = glyph_indices,
-        .glyphAdvances = glyph_advances,
-        .glyphOffsets = glyph_offsets,
-        .isSideways = 0,
-        .bidiLevel = 0,
-    };
-    IDWriteRenderingParams *params;
-    IDWriteFactory_CreateRenderingParams(factory, &params);
-    //IDWriteFactory_CreateCustomRenderingParams();
-    
-    HRESULT hr;
-    hr = IDWriteBitmapRenderTarget_DrawGlyphRun(bitmap_render_target, 0, 0, DWRITE_MEASURING_MODE_NATURAL, &glyph_run, params, 0xFFFFFFFF, 0);
-    assert_hr(hr);
-
-    HDC dc = IDWriteBitmapRenderTarget_GetMemoryDC(bitmap_render_target);
-    HBITMAP bitmap = GetCurrentObject(dc, OBJ_BITMAP);
-    DIBSECTION dib;
-    GetObject(bitmap, sizeof(dib), &dib);
-
-    ID3D11ShaderResourceView* texture_view;
-    D3D11_TEXTURE2D_DESC texture_desc =
-    {
-        .Width = dib.dsBm.bmWidth,
-        .Height = dib.dsBm.bmHeight,
-        .MipLevels = 1,
-        .ArraySize = 1,
-        .Format = DXGI_FORMAT_B8G8R8A8_UNORM,
-        .SampleDesc = { 1, 0 },
-        .Usage = D3D11_USAGE_IMMUTABLE,
-        .BindFlags = D3D11_BIND_SHADER_RESOURCE,
-    };
-
-    D3D11_SUBRESOURCE_DATA texture_data =
-    {
-        .pSysMem = dib.dsBm.bmBits,
-        .SysMemPitch = dib.dsBm.bmHeight * sizeof(u32),
-    };
-
-    ID3D11Texture2D* texture;
-    ID3D11Device_CreateTexture2D(device, &texture_desc, &texture_data, &texture);
-    ID3D11Device_CreateShaderResourceView(device, (ID3D11Resource*)texture, NULL, &font_texture_srv);
-    ID3D11Texture2D_Release(texture);
-
-}
-
     arena_reset(scratch);
 
-    ID3D11DeviceContext_CSSetShaderResources(device_context, 0, 1, &font_texture_srv);
+    dwrite_init();
 
     ID3D11SamplerState *sampler_state;
     D3D11_SAMPLER_DESC sdesc =
@@ -658,8 +685,7 @@ void __stdcall WinMainCRTStartup()
         u32 cell_height;
         u32 num_cells_x;
         u32 num_cells_y;
-        u32 atlas_width_characters_x;
-        u32 atlas_height_characters_y;
+        u32 atlas_width_glyphs;
         i32 view_offset_pixels;
         u32 vsync_line_position;
         i32 pointer_x;
@@ -786,12 +812,11 @@ void __stdcall WinMainCRTStartup()
                 .rect_min_y = cmd->code_view.rect.min_y,
                 .rect_max_x = cmd->code_view.rect.max_x,
                 .rect_max_y = cmd->code_view.rect.max_y,
-                .cell_width = cell_width,
-                .cell_height = cell_height,
+                .cell_width = cmd->code_view.font.glyph_width,
+                .cell_height = cmd->code_view.font.glyph_height,
                 .num_cells_x = cmd->code_view.num_cells_x,
                 .num_cells_y = cmd->code_view.num_cells_y,
-                .atlas_width_characters_x = cmd->code_view.atlas_width_characters_x,
-                .atlas_height_characters_y = cmd->code_view.atlas_height_characters_y,
+                .atlas_width_glyphs = cmd->code_view.font.atlas_width_glyphs,
                 .view_offset_pixels = cmd->code_view.view_offset_pixels,
                 .vsync_line_position = cmd->code_view.vsync_line_position,
                 .pointer_x = cmd->code_view.pointer_x,
@@ -800,6 +825,8 @@ void __stdcall WinMainCRTStartup()
     
             d3d11_write_buffer((ID3D11Resource*)cell_buffer, cmd->code_view.cells, cell_count * sizeof(cell));
             d3d11_write_buffer((ID3D11Resource*)d3d11_cbuffer, &cb, sizeof(cbuffer_t));
+
+            ID3D11DeviceContext_CSSetShaderResources(device_context, 0, 1, (ID3D11ShaderResourceView**)&cmd->code_view.font.os_handle.stuff[1]);
     
             ID3D11DeviceContext_Dispatch(device_context, (cmd->code_view.rect.max_x - cmd->code_view.rect.min_x + 8 - 1) / 8, (cmd->code_view.rect.max_y - cmd->code_view.rect.min_y + 8 - 1) / 8, 1);
             cmd = cmd->next;

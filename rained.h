@@ -287,6 +287,23 @@ typedef struct
     i32 min_x, min_y, max_x, max_y;
 } rect;
 
+typedef struct
+{
+    u64 stuff[2];
+    
+} os_font_atlas_handle;
+
+typedef struct
+{
+    u32 size;
+    u32 atlas_width_glyphs;
+    u32 glyph_width;
+    u32 glyph_height;
+    os_font_atlas_handle os_handle;
+
+} font_atlas;
+
+
 typedef struct renderer_command renderer_command;
 struct renderer_command
 {
@@ -294,12 +311,11 @@ struct renderer_command
     
     struct
     {
+        font_atlas font;
         rect rect;
         cell *cells;
         u32 num_cells_x;
         u32 num_cells_y;
-        u32 atlas_width_characters_x;
-        u32 atlas_height_characters_y;
         i32 view_offset_pixels;
         u32 vsync_line_position;
         i32 pointer_x;
@@ -370,6 +386,8 @@ internal void os_write_file(char *path, void *stuff, u64 size_bytes);
 internal void os_toggle_fullscreen();
 internal string os_clipboard_get(arena *arena);
 internal void os_clipboard_set(string text);
+internal font_atlas os_make_font_atlas(u32 size, arena *scratch);
+internal void os_release_font_atlas(font_atlas atlas);
 
 internal u32 chopped_line_list_find_position(chopped_line_list list, u32 p);
 internal chopped_line_list chop_lines(rained_buffer *buffer, u32 width_cells, u32 start, u32 num_to_chop, u32 num_lines, arena *arena);

@@ -20,8 +20,7 @@ cbuffer cb : register(b0)
     uint cell_height;
     uint num_cells_x;
     uint num_cells_y;
-    uint atlas_width_characters_x;
-    uint atlas_height_characters_y;
+    uint atlas_width_glyphs;
     int view_offset_pixels;
     uint vsync_line_position;
     int pointer_x; 
@@ -89,7 +88,7 @@ void shader_cs(int2 thread_id : SV_DispatchThreadID)
         return;
     }
 
-    int2 atlas_character_pos = int2(c.index % atlas_width_characters_x * cell_width, c.index / atlas_width_characters_x * cell_height);
+    int2 atlas_character_pos = int2(c.index % atlas_width_glyphs * cell_width, c.index / atlas_width_glyphs * cell_height);
     int2 atlas_pos = atlas_character_pos + offset_pixel_pos % int2(cell_width, cell_height);
     float4 tex = atlas.Load(int3(atlas_pos, 0), int2(0,0));
     

@@ -1,8 +1,5 @@
 #include "rained.h"
 
-u32 cell_width;
-u32 cell_height = 17;
-
 typedef struct rained_clang_state rained_clang_state;
 
 typedef struct
@@ -15,6 +12,8 @@ typedef struct
     rained_tile         *tile_right;
     rained_tile         *focused_tile;
     rained_clang_state  *clang_state;
+    u32                 font_size;
+    font_atlas          font;
 
 } rained_state;
 
@@ -951,6 +950,9 @@ internal void caret_move_up_chopped(rained_view *view, caret *caret)
 
 internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount, b32 is_focused)
 {
+    u32 cell_width = global_state.font.glyph_width;
+    u32 cell_height = global_state.font.glyph_height;
+
     view->width_cells = (ctx->rect.max_x - ctx->rect.min_x + cell_width - 1) / cell_width;
     view->height_cells = (ctx->rect.max_y - ctx->rect.min_y + cell_height - 1) / cell_height + 1;
 
@@ -1140,12 +1142,11 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
     {
         .code_view = 
         {
+            .font = global_state.font,
             .rect = ctx->rect,
             .cells = cells,
             .num_cells_x = view->width_cells,
             .num_cells_y = view->height_cells,
-            .atlas_width_characters_x = 14,
-            .atlas_height_characters_y = 7,
             .view_offset_pixels = view->y_offset_pixels < 0.0f ? view->y_offset_pixels : (i32)view->y_offset_pixels % cell_height,
             .vsync_line_position = os_time_us() / 1000 % ctx->screen_w,
         }
@@ -1268,8 +1269,15 @@ internal renderer_command *draw(rained_input *input)
         rained_view *v1 = tile_push_view(global_state.tile_right, b1);
         global_state.clang_state = arena_push_struct_zero(global_state.forever_arena, rained_clang_state);
         rained_clang_init(global_state.clang_state);
+        global_state.font_size = 18;
     }
     arena_reset(global_state.frame_arena);
+
+    if(global_state.font.size != global_state.font_size)
+    {
+        os_release_font_atlas(global_state.font);
+        global_state.font = os_make_font_atlas(global_state.font_size, global_state.frame_arena);
+    }
     
     rained_view *view = global_state.focused_tile->view;
 
@@ -1434,6 +1442,17 @@ internal renderer_command *draw(rained_input *input)
                         insert.strings[j] = to_paste;
                     }
                     carets_insert_or_replace_selection(view, insert, 1);
+                }
+                else if(e.code == (KEY_PLUS | MODIFIER_CTRL))
+                {
+                    global_state.font_size++;
+                }
+                else if(e.code == (KEY_MINUS | MODIFIER_CTRL))
+                {
+                    if(global_state.font_size > 1)
+                    {
+                        global_state.font_size--;
+                    }
                 }
             }
         }        

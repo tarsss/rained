@@ -313,25 +313,38 @@ typedef struct
 
 } font_atlas;
 
+typedef enum renderer_command_kind
+{
+    RENDERER_COMMAND_CODE_VIEW,
+    RENDERER_COMMAND_RECT,
+
+} renderer_command_kind;
 
 typedef struct renderer_command renderer_command;
 struct renderer_command
 {
-    renderer_command    *next;
+    renderer_command        *next;
+    renderer_command_kind   kind;
     
-    struct
+    rect rect;
+    union
     {
-        font_atlas font;
-        rect rect;
-        cell *cells;
-        u32 num_cells_x;
-        u32 num_cells_y;
-        i32 view_offset_pixels;
-        u32 vsync_line_position;
-        i32 pointer_x;
-        i32 pointer_y;
-
-    } code_view;
+        struct
+        {
+            font_atlas font;
+            cell *cells;
+            u32 num_cells_x;
+            u32 num_cells_y;
+            i32 view_offset_pixels;
+            u32 vsync_line_position;
+            i32 pointer_x;
+            i32 pointer_y;
+        } code_view;
+        struct
+        {
+            u32 color;
+        } quad;
+    };
 };
 
 typedef struct undo_buffer_entry undo_buffer_entry;

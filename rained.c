@@ -6,7 +6,6 @@ typedef struct
 {
     arena               *frame_arena;
     arena               *forever_arena;
-    renderer_command    *commands;
     rained_buffer       *buffers;
     rained_tile         *tile_left;
     rained_tile         *tile_right;
@@ -187,6 +186,7 @@ internal string string_copy(string str, arena *arena)
     };
 }
 
+#define sll_push_queue(first, last, e) { if(!first) { first = e; } if(last) { last->next = e; } last = e; }
 #define sll_push(sll, e) { void *t = sll; sll = e; e->next = t; }
 #define sll_pop(sll) if(sll) { sll = sll->next; }
 
@@ -777,6 +777,7 @@ internal u32 position_to_line_in_chopped_line(rained_buffer *buffer, u32 width_c
 
 typedef struct
 {
+    renderer_command    *commands_first;
     renderer_command    *commands;
     u32                 screen_w, screen_h;
     rect                rect;
@@ -787,7 +788,7 @@ internal void push_renderer_command(draw_context *ctx, renderer_command cmd)
 {
     renderer_command *p = arena_push_struct(global_state.frame_arena, renderer_command);
     *p = cmd;
-    sll_push(ctx->commands, p);
+    sll_push_queue(ctx->commands_first, ctx->commands, p);
 }
 
 internal u32 find_line(rained_buffer *buffer, u32 line, u32 *out_line)
@@ -950,11 +951,65 @@ internal void caret_move_up_chopped(rained_view *view, caret *caret)
 
 internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount, b32 is_focused)
 {
+    u32 text_color = 0x009F9F9F;
+    u32 bg_color = 0x00000000;
+    u32 caret_line_color = 0x001F1F1F;
+    u32 selection_color = 0x00545e52;
+
     u32 cell_width = global_state.font.glyph_width;
     u32 cell_height = global_state.font.glyph_height;
-
     view->width_cells = (ctx->rect.max_x - ctx->rect.min_x + cell_width - 1) / cell_width;
     view->height_cells = (ctx->rect.max_y - ctx->rect.min_y + cell_height - 1) / cell_height + 1;
+
+    {
+        u32 cell_count = view->width_cells; 
+        cell *cells = arena_push(global_state.frame_arena, cell_count * sizeof(cell), 64);
+    
+        for(u32 i = 0; i < cell_count; i++)
+        {
+            cells[i] = (cell) 
+            {
+                .bg_color = 0x00545e52 / 2
+            };
+        }
+
+        for(u32 j = 0; j < view->buffer->path.length; j++)
+        {
+            cells[j] = (cell) 
+            { 
+                .atlas_index = view->buffer->path.p[j] - 32,
+                .text_color = text_color,
+                .bg_color = 0x00545e52 / 2,
+            };
+        }
+
+        u32 title_height = cell_height;
+
+        rect rect = 
+        {
+            .max_x = ctx->rect.max_x,
+            .max_y = title_height,
+            .min_x = ctx->rect.min_x,
+            .min_y = ctx->rect.min_y,
+        };
+        
+        push_renderer_command(ctx, (renderer_command)
+        {
+            .kind = RENDERER_COMMAND_CODE_VIEW,
+            .rect = rect,
+            .code_view = 
+            {
+                .font = global_state.font,
+                .cells = cells,
+                .num_cells_x = view->width_cells,
+                .num_cells_y = 1,
+                .view_offset_pixels = 0.0f,
+                .vsync_line_position = os_time_us() / 1000 % ctx->screen_w,
+            }
+        });
+
+        ctx->rect.min_y = title_height;
+    }
 
     if(view->fit_caret)
     {
@@ -1051,11 +1106,6 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
         }
     }
 
-    u32 text_color = 0x009F9F9F;
-    u32 bg_color = 0x00000000;
-    u32 caret_line_color = 0x001F1F1F;
-    u32 selection_color = 0x00545e52;
-
     u32 cell_count = view->width_cells * view->height_cells; 
     cell *cells = arena_push(global_state.frame_arena, cell_count * sizeof(cell), 64);
 
@@ -1140,10 +1190,11 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
 
     push_renderer_command(ctx, (renderer_command)
     {
+        .kind = RENDERER_COMMAND_CODE_VIEW,
+        .rect = ctx->rect,
         .code_view = 
         {
             .font = global_state.font,
-            .rect = ctx->rect,
             .cells = cells,
             .num_cells_x = view->width_cells,
             .num_cells_y = view->height_cells,
@@ -1587,14 +1638,13 @@ internal renderer_command *draw(rained_input *input)
 
     global_state.tile_right->rect = (rect)
     {
-        .min_x = input->screen_w / 2,
+        .min_x = input->screen_w / 2 + 2,
         .max_x = input->screen_w,
         .max_y = input->screen_h    
     };
 
     draw_context ctx = 
     {
-        .commands = global_state.commands,
         .rect = (rect)
         {
             .max_x = input->screen_w,
@@ -1607,5 +1657,19 @@ internal renderer_command *draw(rained_input *input)
     draw_tile(&ctx, global_state.tile_left, global_state.tile_left == global_state.focused_tile, global_state.tile_left == global_state.focused_tile ? input->mouse_wheel_delta : 0.0f);
     draw_tile(&ctx, global_state.tile_right, global_state.tile_right == global_state.focused_tile, global_state.tile_right == global_state.focused_tile ? input->mouse_wheel_delta : 0.0f);
 
-    return ctx.commands;
+    // tile separator type sh
+    push_renderer_command(&ctx, (renderer_command)
+    {
+        .kind = RENDERER_COMMAND_RECT,
+        .rect = (rect)
+        {
+            .min_x = input->screen_w / 2,
+            .min_y = 0,
+            .max_x = input->screen_w / 2 + 2,
+            .max_y = input->screen_h,
+        },
+        .quad.color = 0x001F1F1F
+    });
+
+    return ctx.commands_first;
 }

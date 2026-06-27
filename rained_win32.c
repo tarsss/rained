@@ -695,6 +695,8 @@ void __stdcall WinMainCRTStartup()
         u32 vsync_line_position;
         i32 pointer_x;
         i32 pointer_y;
+        u32 kind;
+        u32 quad_color;
 
     } cbuffer_t;
 
@@ -813,10 +815,10 @@ void __stdcall WinMainCRTStartup()
     
             cbuffer_t cb = 
             {
-                .rect_min_x = cmd->code_view.rect.min_x,
-                .rect_min_y = cmd->code_view.rect.min_y,
-                .rect_max_x = cmd->code_view.rect.max_x,
-                .rect_max_y = cmd->code_view.rect.max_y,
+                .rect_min_x = cmd->rect.min_x,
+                .rect_min_y = cmd->rect.min_y,
+                .rect_max_x = cmd->rect.max_x,
+                .rect_max_y = cmd->rect.max_y,
                 .cell_width = cmd->code_view.font.glyph_width,
                 .cell_height = cmd->code_view.font.glyph_height,
                 .num_cells_x = cmd->code_view.num_cells_x,
@@ -826,6 +828,8 @@ void __stdcall WinMainCRTStartup()
                 .vsync_line_position = cmd->code_view.vsync_line_position,
                 .pointer_x = cmd->code_view.pointer_x,
                 .pointer_y = cmd->code_view.pointer_y,
+                .kind = cmd->kind,
+                .quad_color = cmd->quad.color,
             };
     
             d3d11_write_buffer((ID3D11Resource*)cell_buffer, cmd->code_view.cells, cell_count * sizeof(cell));
@@ -833,7 +837,7 @@ void __stdcall WinMainCRTStartup()
 
             ID3D11DeviceContext_CSSetShaderResources(device_context, 0, 1, (ID3D11ShaderResourceView**)&cmd->code_view.font.os_handle.stuff[1]);
     
-            ID3D11DeviceContext_Dispatch(device_context, (cmd->code_view.rect.max_x - cmd->code_view.rect.min_x + 8 - 1) / 8, (cmd->code_view.rect.max_y - cmd->code_view.rect.min_y + 8 - 1) / 8, 1);
+            ID3D11DeviceContext_Dispatch(device_context, (cmd->rect.max_x - cmd->rect.min_x + 8 - 1) / 8, (cmd->rect.max_y - cmd->rect.min_y + 8 - 1) / 8, 1);
             cmd = cmd->next;
         }
         PROFILE_END();

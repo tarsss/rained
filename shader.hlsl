@@ -25,6 +25,8 @@ cbuffer cb : register(b0)
     uint vsync_line_position;
     int pointer_x; 
     int pointer_y;
+    uint kind;
+    uint quad_color;
 }
 
 #define rgb(a,b,c) (float3(a,b,c) / 255.0f)
@@ -50,6 +52,12 @@ void shader_cs(int2 thread_id : SV_DispatchThreadID)
     int2 pixel_pos = thread_id + int2(rect_min_x, rect_min_y);
     if(pixel_pos.x < 0 || pixel_pos.y < 0 || pixel_pos.x >= rect_max_x || pixel_pos.y >= rect_max_y)
     {
+        return;
+    }
+
+    if(kind == 1)
+    {
+        output[pixel_pos] = unpack_color(quad_color);
         return;
     }
     

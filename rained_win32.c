@@ -273,7 +273,7 @@ internal font_atlas os_make_font_atlas(u32 size, arena *scratch)
     f32 height = (font_face_metrics.ascent + font_face_metrics.descent + font_face_metrics.lineGap) * result.glyph_height / font_face_metrics.designUnitsPerEm;
     f32 mul = result.glyph_height / height;
     
-    result.glyph_width = (f32)glyph_metrics[0].advanceWidth / font_face_metrics.designUnitsPerEm * result.glyph_height;
+    result.glyph_width = (f32)glyph_metrics[0].advanceWidth / font_face_metrics.designUnitsPerEm * result.glyph_height * mul;
 
     u32 atlas_width_glyphs = 14;
     u32 atlas_heiht_glyphs = 7;
@@ -293,8 +293,10 @@ internal font_atlas os_make_font_atlas(u32 size, arena *scratch)
         };
     }
 
-    u32 atlas_width_pixels = 256;
-    u32 atlas_height_pixels = 256;
+    u32 atlas_width_pixels = 14 * result.glyph_width;
+    u32 atlas_height_pixels = 7 * result.glyph_height;
+    atlas_width_pixels = ceil_pow2_u32(max(atlas_width_pixels, atlas_height_pixels));
+    atlas_height_pixels = atlas_width_pixels;
 
     IDWriteBitmapRenderTarget *bitmap_render_target;
     hr = IDWriteGdiInterop_CreateBitmapRenderTarget(dwrite_state.gdi_interop, 0, atlas_width_pixels, atlas_height_pixels, &bitmap_render_target);
@@ -302,7 +304,7 @@ internal font_atlas os_make_font_atlas(u32 size, arena *scratch)
     DWRITE_GLYPH_RUN glyph_run = 
     {
         .fontFace = dwrite_state.font_face,
-        .fontEmSize = result.glyph_height * mul,
+        .fontEmSize = result.glyph_height * mul - 1,
         .glyphCount = glyph_count,
         .glyphIndices = glyph_indices,
         .glyphAdvances = glyph_advances,
@@ -338,6 +340,9 @@ internal font_atlas os_make_font_atlas(u32 size, arena *scratch)
 
     ID3D11Device_CreateTexture2D(device, &texture_desc, &texture_data, (ID3D11Texture2D **)&result.os_handle.stuff[0]);
     ID3D11Device_CreateShaderResourceView(device, (ID3D11Resource*)result.os_handle.stuff[0], NULL, (ID3D11ShaderResourceView **)&result.os_handle.stuff[1]);
+
+    IDWriteBitmapRenderTarget_Release(bitmap_render_target);
+
     return result;
 }
 

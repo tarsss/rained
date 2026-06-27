@@ -47,6 +47,16 @@ typedef int32_t     b32;
 
 #define PAGE_SIZE 4096
 
+u32 ceil_pow2_u32(u32 n)
+{
+    if (n <= 1) 
+    {
+        return 1;
+    }
+    u32 p = 1 << (32 - __lzcnt(n - 1));
+    return p;
+}
+
 #ifdef SPALL_ENABLED
 #include "spall.h"
 static SpallProfile spall_profile;

@@ -10,6 +10,7 @@ typedef struct
     rained_tile         *tile_left;
     rained_tile         *tile_right;
     rained_tile         *focused_tile;
+    rained_tile         *mouse_drag_tile;
     rained_clang_state  *clang_state;
     u32                 font_size;
     font_atlas          font;
@@ -1204,6 +1205,19 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
     });
 }
 
+// todo: there is a bug with big lines.
+internal u32 tile_screen_pos_to_view_buffer_text_pos(rained_tile *tile, i32 screen_x, i32 screen_y)
+{
+    screen_y -= global_state.font.glyph_height;
+    screen_y += tile->view->y_offset_pixels;
+    i32 pos_column = max(0, (screen_x - tile->rect.min_x) / (i32)global_state.font.glyph_width);
+    i32 pos_line = max(0, (screen_y - tile->rect.min_y) / (i32)global_state.font.glyph_height);
+    u32 view_line_p = find_line(tile->view->buffer, tile->view->line_index, &tile->view->line_index);
+    chopped_line_list l = chop_lines(tile->view->buffer, tile->view->width_cells, view_line_p, tile->view->height_cells, -1, global_state.frame_arena);
+    chopped_line line = l.lines[max(min(pos_line, l.count - 1), 0)];
+    return line.pos_in_text + min(line.length - 1, pos_column);
+}
+
 internal void draw_tile(draw_context *ctx, rained_tile *tile, b32 is_focused, f32 scroll)
 {
     if(tile->view)
@@ -1313,6 +1327,7 @@ internal renderer_command *draw(rained_input *input)
         global_state.frame_arena = arena_alloc(gb(1), mb(1));
         global_state.tile_left = arena_push_struct_zero(global_state.forever_arena, rained_tile);
         global_state.tile_right = arena_push_struct_zero(global_state.forever_arena, rained_tile);
+        global_state.tile_left->next = global_state.tile_right;
         global_state.focused_tile = global_state.tile_left;
         rained_buffer *b0 = open_buffer_from_file(&global_state, arena_push_cstring(global_state.frame_arena, ".\\test.txt"));
         rained_buffer *b1 = open_buffer_from_file(&global_state, arena_push_cstring(global_state.frame_arena, ".\\rained_win32.c"));
@@ -1550,6 +1565,27 @@ internal renderer_command *draw(rained_input *input)
             }
         }
 
+        if(e.type == INPUT_EVENT_MOUSE_BUTTON)
+        {
+            if(e.lmb.is_down && !e.lmb.was_down)
+            {
+                rained_tile *t = global_state.tile_left;
+                while(t)
+                {
+                    if(e.x > t->rect.min_x && e.x < t->rect.max_x && e.y > t->rect.min_y && e.y < t->rect.max_y)
+                    {
+                        global_state.focused_tile = t;
+                        global_state.mouse_drag_tile = t;
+                        global_state.mouse_drag_tile->view->num_carets = 1;
+                        global_state.mouse_drag_tile->view->carets[0].selection_pos = tile_screen_pos_to_view_buffer_text_pos(t, e.x, e.y);
+                        global_state.mouse_drag_tile->view->carets[0].selection_active = 1;
+                        break;
+                    }
+                    t = t->next;
+                }
+            }
+        }
+
         for(u32 i = 0; i < view->num_carets; i++)
         {
             caret *caret = &view->carets[i];
@@ -1628,6 +1664,22 @@ internal renderer_command *draw(rained_input *input)
         }
 
         merge_overlapping_carets_in_a_slow_way(view);
+    }
+
+    // todo: doesn't work the way i want it to when mouse leaves the client area. im not sure what to do about this right now
+    if(global_state.mouse_drag_tile)
+    {
+        if(input->lmb)
+        {
+            global_state.mouse_drag_tile->view->num_carets = 1;
+            caret *caret = &global_state.mouse_drag_tile->view->carets[0];
+            caret->position = tile_screen_pos_to_view_buffer_text_pos(global_state.mouse_drag_tile, input->mouse_x, input->mouse_y);
+            caret->wish_column = caret_get_column(global_state.mouse_drag_tile->view, caret);
+        }
+        else 
+        {
+            global_state.mouse_drag_tile = 0;
+        }
     }
 
     global_state.tile_left->rect = (rect)

@@ -161,6 +161,7 @@ typedef enum INPUT_EVENT
     INPUT_EVENT_ERROR = 0,
     INPUT_EVENT_KEY,
     INPUT_EVENT_TEXT,
+    INPUT_EVENT_MOUSE_BUTTON,
 
 } INPUT_EVENT;
 
@@ -210,6 +211,13 @@ typedef enum KEY_CODE
 
 typedef struct
 {
+    b8 is_down;
+    b8 was_down;
+
+} mouse_button_event;
+
+typedef struct
+{
     INPUT_EVENT     type;
     union
     {
@@ -220,6 +228,13 @@ typedef struct
             b8      is_down;
         };
         char        character;
+        struct
+        {
+            mouse_button_event lmb;
+            mouse_button_event rmb;
+            mouse_button_event mmb;
+            u32 x, y;
+        };
     };
 
 } input_event;
@@ -286,6 +301,7 @@ typedef struct
     input_event *input_queue;
     u32         input_queue_count;
     i32         mouse_x, mouse_y;
+    b8          lmb, rmb, mmb;
     f32         mouse_wheel_delta;
     u32         screen_w, screen_h;
     u64         frame_start;
@@ -398,6 +414,7 @@ struct rained_tile
 {
     rect                rect;
     rained_view         *view;
+    rained_tile         *next;
 };
 
 internal void os_mem_reserve(u64 size, void **address);

@@ -27,6 +27,7 @@ b8                          quit;
 i16                         mouse_wheel_delta_accum;
 f32                         mouse_wheel_delta;
 i32                         mouse_x, mouse_y;
+b32                         lmb, rmb, mmb;
 char                        buf[64]; // for sprintf, dumb
 u64                         frame_start;
 u32                         cell_buffer_count;
@@ -416,6 +417,34 @@ LRESULT window_callback(HWND window,
             mouse_y = HIWORD(lParam);
             break;
         }
+        case WM_LBUTTONDOWN:
+        case WM_RBUTTONDOWN:
+        case WM_MBUTTONDOWN:
+        case WM_LBUTTONUP:
+        case WM_RBUTTONUP:
+        case WM_MBUTTONUP:
+        {
+            b32 lmb_was_down = lmb;
+            b32 rmb_was_down = rmb;
+            b32 mmb_was_down = mmb;
+            lmb = wParam & 0x0001;
+            rmb = wParam & 0x0002;
+            mmb = wParam & 0x0010;
+            input_queue[input_queue_count] = (input_event)
+            {
+                .type = INPUT_EVENT_MOUSE_BUTTON,
+                .lmb.is_down = lmb,
+                .lmb.was_down = lmb_was_down,
+                .rmb.is_down = rmb,
+                .rmb.was_down = rmb_was_down,
+                .mmb.is_down = mmb,
+                .mmb.was_down = mmb_was_down,
+                .x = mouse_x,
+                .y = mouse_y
+            };
+            input_queue_count++;
+            break;
+        }
         case WM_SIZE:
         {
             if(wParam == SIZE_MINIMIZED)
@@ -768,6 +797,9 @@ void __stdcall WinMainCRTStartup()
             .mouse_wheel_delta = mouse_wheel_delta,
             .mouse_x = mouse_x,
             .mouse_y = mouse_y,
+            .lmb = lmb,
+            .rmb = rmb,
+            .mmb = mmb,
             .screen_h = screen_h,
             .screen_w = screen_w,
         };

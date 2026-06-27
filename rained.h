@@ -313,6 +313,11 @@ typedef struct
     i32 min_x, min_y, max_x, max_y;
 } rect;
 
+internal b32 rect_contains_point(rect rect, i32 x, i32 y)
+{
+    return x >= rect.min_x && x <= rect.max_x && y >= rect.min_y && y <= rect.max_y;
+}
+
 typedef struct
 {
     u64 stuff[2];

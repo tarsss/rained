@@ -1572,7 +1572,7 @@ internal renderer_command *draw(rained_input *input)
                 rained_tile *t = global_state.tile_left;
                 while(t)
                 {
-                    if(e.x > t->rect.min_x && e.x < t->rect.max_x && e.y > t->rect.min_y && e.y < t->rect.max_y)
+                    if(rect_contains_point(t->rect, e.x, e.y))
                     {
                         global_state.focused_tile = t;
                         global_state.mouse_drag_tile = t;
@@ -1706,8 +1706,12 @@ internal renderer_command *draw(rained_input *input)
         .screen_h = input->screen_h
     };
 
-    draw_tile(&ctx, global_state.tile_left, global_state.tile_left == global_state.focused_tile, global_state.tile_left == global_state.focused_tile ? input->mouse_wheel_delta : 0.0f);
-    draw_tile(&ctx, global_state.tile_right, global_state.tile_right == global_state.focused_tile, global_state.tile_right == global_state.focused_tile ? input->mouse_wheel_delta : 0.0f);
+    rained_tile *t = global_state.tile_left;
+    while(t)
+    {
+        draw_tile(&ctx, t, global_state.focused_tile == t, rect_contains_point(t->rect, input->mouse_x, input->mouse_y) ? input->mouse_wheel_delta : 0.0f);
+        t = t->next;
+    }
 
     // tile separator type sh
     push_renderer_command(&ctx, (renderer_command)

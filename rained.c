@@ -191,6 +191,8 @@ internal string string_copy(string str, arena *arena)
 #define sll_push(sll, e) { void *t = sll; sll = e; e->next = t; }
 #define sll_pop(sll) if(sll) { sll = sll->next; }
 
+#include "rained_clang.c"
+
 internal loaded_bitmap load_bitmap(char *path, arena_t *arena)
 {
     void *file = os_read_file(path, 0, arena);
@@ -961,7 +963,7 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
     u32 cell_height = global_state.font.glyph_height;
     view->width_cells = (ctx->rect.max_x - ctx->rect.min_x + cell_width - 1) / cell_width;
     view->height_cells = (ctx->rect.max_y - ctx->rect.min_y + cell_height - 1) / cell_height + 1;
-
+    
     {
         u32 cell_count = view->width_cells; 
         cell *cells = arena_push(global_state.frame_arena, cell_count * sizeof(cell), 64);
@@ -1189,6 +1191,61 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
         }
     }
 
+#if 1
+    
+    if(!view->is_a_command_view && view->buffer->path.p)
+    {
+        u32 view_length = chopped.lines[chopped.count - 1].pos_in_text + chopped.lines[chopped.count - 1].length - p;
+        ast_node_array arr = rained_clang_buffer_ast_nodes_from_range(global_state.clang_state, view->buffer, p, view_length, global_state.frame_arena);
+    
+        u32 fuckoff;
+        for(u32 i = 0; i < arr.num_nodes; i++)
+        {
+            ast_node n = arr.nodes[i];
+            u32 color = 0;
+    
+            switch(n.kind)
+            {
+                case CXCursor_TypeRef:
+                    color = 0x000000FF;
+                break;
+
+                case CXCursor_CallExpr:
+                    color = 0x0000FF00;
+                break;
+
+                case CXCursor_FunctionDecl:
+                    color = 0x00FF0000;
+                break;
+
+                case CXCursor_MacroExpansion:
+                    color = 0x0000FFFF;
+                break;
+    
+                default:
+                {
+                    continue;
+                }
+            }
+            
+            for(i32 y = 0; y < count; y++)
+            {
+                chopped_line *l = &chopped.lines[offset_lines + y];
+    
+                for(i32 j = max(n.offset, l->pos_in_text); j < min(l->pos_in_text + l->length, n.offset + n.length); j++)
+                {
+                    i32 x = j - l->pos_in_text;
+                    u32 cell_index = x + y * view->width_cells;
+                    cell *c = &cells[cell_index];
+                    c->text_color = color;
+                }
+            }
+        }
+
+    }
+
+#endif
+
     push_renderer_command(ctx, (renderer_command)
     {
         .kind = RENDERER_COMMAND_CODE_VIEW,
@@ -1314,8 +1371,6 @@ internal copy_cut_range *carets_get_copy_or_cut_ranges(rained_view *view, arena 
     }
     return res;
 }
-
-#include "rained_clang.c"
 
 internal renderer_command *draw(rained_input *input)
 {
@@ -1613,6 +1668,26 @@ internal renderer_command *draw(rained_input *input)
                     }
                     else if(e.code == KEY_UP || e.code == (KEY_UP | MODIFIER_SHIFT))
                     {
+                        caret_move_up_chopped(view, caret);
+                        view->fit_caret = 1;
+                        caret->selection_active = (e.code & MODIFIER_SHIFT);
+                    }
+                    else if(e.code == (KEY_DOWN | MODIFIER_CTRL) || e.code == (KEY_DOWN | MODIFIER_SHIFT | MODIFIER_CTRL))
+                    {
+                        caret_move_down_chopped(view, caret);
+                        caret_move_down_chopped(view, caret);
+                        caret_move_down_chopped(view, caret);
+                        caret_move_down_chopped(view, caret);
+                        caret_move_down_chopped(view, caret);
+                        view->fit_caret = 1;
+                        caret->selection_active = (e.code & MODIFIER_SHIFT);
+                    }
+                    else if(e.code == (KEY_UP | MODIFIER_CTRL) || e.code == (KEY_UP | MODIFIER_SHIFT | MODIFIER_CTRL))
+                    {
+                        caret_move_up_chopped(view, caret);
+                        caret_move_up_chopped(view, caret);
+                        caret_move_up_chopped(view, caret);
+                        caret_move_up_chopped(view, caret);
                         caret_move_up_chopped(view, caret);
                         view->fit_caret = 1;
                         caret->selection_active = (e.code & MODIFIER_SHIFT);

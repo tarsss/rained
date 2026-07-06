@@ -6,6 +6,7 @@
 #include <dxgi1_3.h>
 #include <dxgidebug.h>
 #include "cdwrite.h"
+#include "debugapi.h"
 #include "shader.h"
 
 HWND                        window;
@@ -347,6 +348,11 @@ internal font_atlas os_make_font_atlas(u32 size, arena *scratch)
     return result;
 }
 
+internal void os_debug_output_string(char *str)
+{
+    OutputDebugStringA(str);
+}
+
 static input_event input_queue[128];
 static u32         input_queue_count;
 
@@ -508,8 +514,14 @@ internal void busy_wait(u64 time_us)
     while(os_time_us() < a) { }
 }
 
+#include <shellapi.h>   // CommandLineToArgv
+
 void __stdcall WinMainCRTStartup()
 {
+    LPWSTR command_line = GetCommandLineW();
+    i32 argc;
+    LPWSTR *argv = CommandLineToArgvW(command_line, &argc);
+
     QueryPerformanceFrequency((LARGE_INTEGER*)&perf_counter_freq);
     
     #ifdef SPALL_ENABLED

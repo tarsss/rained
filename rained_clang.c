@@ -8,14 +8,61 @@ struct rained_clang_state
 
 };
 
+void rained_clang_test_visit_inclusion(CXFile included_file, CXSourceLocation *inclusion_stack, unsigned include_len, CXClientData client_data)
+{
+    char *str = clang_getCString(clang_getFileName(included_file));
+}
+
 internal void rained_clang_parse_the_whole_thing(rained_clang_state *state)
 {
     if(state->translation_unit)
     {
         clang_disposeTranslationUnit(state->translation_unit);
     }
+    const char *argv[] = 
+    {
+        "-I", "C:\\llvm\\include\\",
+        "-I", "C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Community\\VC\\Tools\\MSVC\\14.29.30133\\ATLMFC\\include",
+        "-I", "C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Community\\VC\\Tools\\MSVC\\14.29.30133\\include",
+        "-I", "C:\\Program Files (x86)\\Windows Kits\\NETFXSDK\\4.8\\include\\um",
+        "-I", "C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22621.0\\ucrt",
+        "-I", "C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22621.0\\shared",
+        "-I", "C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22621.0\\um",
+        "-I", "C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22621.0\\winrt",
+        "-I", "C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22621.0\\cppwinr",
+    };
+    i32 argc = lengthof(argv);
+
     u32 options = CXTranslationUnit_DetailedPreprocessingRecord | CXTranslationUnit_KeepGoing;
-    enum CXErrorCode err = clang_parseTranslationUnit2(state->index, "rained_win32.c", 0, 0,0,0, options, &state->translation_unit);
+    enum CXErrorCode err = clang_parseTranslationUnit2(state->index, "rained_win32.c", argv, argc,0,0, options, &state->translation_unit);
+
+    u32 n = clang_getNumDiagnostics(state->translation_unit);
+    for(u32 i = 0; i < n; i++)
+    {
+        CXDiagnostic diagnostic = clang_getDiagnostic(state->translation_unit, 0);
+        char *spelling = clang_getCString(clang_getDiagnosticSpelling(diagnostic));
+        enum CXDiagnosticSeverity severity = clang_getDiagnosticSeverity(diagnostic);
+        char *severity_str;
+        CXSourceLocation loc = clang_getDiagnosticLocation(diagnostic);
+        CXFile file;
+        u32 line, column;
+        clang_getFileLocation(loc, &file, &line, &column, 0);
+        char *file_name = clang_getCString(clang_getFileName(file));
+        switch(severity)
+        {
+            case CXDiagnostic_Ignored: severity_str = "CXDiagnostic_Ignored"; break;
+            case CXDiagnostic_Note: severity_str = "CXDiagnostic_Note"; break;
+            case CXDiagnostic_Warning: severity_str = "CXDiagnostic_Warning"; break;
+            case CXDiagnostic_Error: severity_str = "CXDiagnostic_Error"; break;
+            case CXDiagnostic_Fatal: severity_str = "CXDiagnostic_Fatal"; break;
+        }
+        char buf[1024];
+        stbsp_sprintf(buf, "%s \"%s\" %s(%u,%u)\n", severity_str, spelling, file_name, line, column);
+        os_debug_output_string(buf);
+    }
+
+    clang_getInclusions(state->translation_unit, &rained_clang_test_visit_inclusion, 0);
+
     assert(err == CXError_Success);
 }
 

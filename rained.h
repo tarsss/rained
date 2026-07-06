@@ -433,6 +433,7 @@ internal string os_clipboard_get(arena *arena);
 internal void os_clipboard_set(string text);
 internal font_atlas os_make_font_atlas(u32 size, arena *scratch);
 internal void os_release_font_atlas(font_atlas atlas);
+internal void os_debug_output_string(char *str);
 
 internal u32 chopped_line_list_find_position(chopped_line_list list, u32 p);
 internal chopped_line_list chop_lines(rained_buffer *buffer, u32 width_cells, u32 start, u32 num_to_chop, u32 num_lines, arena *arena);

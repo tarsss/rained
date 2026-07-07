@@ -1025,7 +1025,8 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
     if(!view->is_a_command_view && view->buffer->path.p)
     {
         u32 view_length = chopped.lines[chopped.count - 1].pos_in_text + chopped.lines[chopped.count - 1].length - p;
-        ast_node_array arr = rained_clang_buffer_ast_nodes_from_range(global_state.clang_state, view->buffer, p, view_length, global_state.frame_arena);
+        //ast_node_array arr = rained_clang_buffer_ast_nodes_from_range(global_state.clang_state, view->buffer, p, view_length, global_state.frame_arena);
+        ast_node_array arr = rained_clang_buffer_ast_nodes_from_range2(global_state.clang_state, view->buffer, p, view_length, global_state.frame_arena);
     
         u32 fuckoff;
         for(u32 i = 0; i < arr.num_nodes; i++)

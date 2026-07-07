@@ -197,3 +197,43 @@ internal ast_node_array rained_clang_buffer_ast_nodes_from_range(rained_clang_st
         .num_nodes = num_nodes
     };
 }
+
+internal ast_node_array rained_clang_buffer_ast_nodes_from_range2(rained_clang_state *state, rained_buffer *buffer, u32 position, u32 length, arena *arena)
+{
+    PROFILE_BEGIN("nodes_from_range2");
+    CXFile file = clang_getFile(state->translation_unit, buffer->path.p);
+    CXSourceLocation begin = clang_getLocationForOffset(state->translation_unit, file, position);
+    CXSourceLocation end = clang_getLocationForOffset(state->translation_unit, file, position + length);
+    CXSourceRange range = clang_getRange(begin, end);
+    CXToken *tokens = 0;
+    u32 num_tokens = 0;
+    clang_tokenize(state->translation_unit, range, &tokens, &num_tokens);
+    CXCursor *cursors = arena_push(arena, sizeof(CXCursor) * num_tokens, 8);
+    clang_annotateTokens(state->translation_unit, tokens, num_tokens, cursors);
+    ast_node *nodes = arena_head(arena);
+    for(u32 i = 0; i < num_tokens; i++)
+    {
+        enum CXCursorKind kind = clang_getCursorKind(cursors[i]);
+        CXSourceRange token_range = clang_getTokenExtent(state->translation_unit, tokens[i]);
+        CXSourceLocation token_start = clang_getRangeStart(token_range);
+        CXSourceLocation token_end = clang_getRangeEnd(token_range);
+        u32 token_start_offset, token_end_offset;
+        clang_getFileLocation(token_start, 0, 0, 0, &token_start_offset);
+        clang_getFileLocation(token_end, 0, 0, 0, &token_end_offset);
+
+        ast_node *n = arena_push_struct_noalign(arena, ast_node);
+        *n = (ast_node)
+        {
+            .kind = kind,
+            .file = file,
+            .offset = token_start_offset,
+            .length = token_end_offset - token_start_offset
+        };
+    }
+    PROFILE_END();
+    return (ast_node_array)
+    {
+        .nodes = nodes,
+        .num_nodes = num_tokens,
+    };
+}

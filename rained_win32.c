@@ -133,6 +133,27 @@ internal void os_write_file(char *path, void *stuff, u64 size_bytes)
     CloseHandle(file);
 }
 
+internal void *os_create_spall_file()
+{
+    return CreateFileA("profile.spall", 
+        GENERIC_WRITE | FILE_APPEND_DATA, 
+        FILE_SHARE_READ,
+        0,
+        CREATE_ALWAYS, 
+        FILE_ATTRIBUTE_NORMAL, 
+        0);
+}
+
+internal b32 os_write_spall_file(void *spall_file, void *data, u32 length)
+{
+    return WriteFile(spall_file, data, length, 0, 0);
+}
+
+internal void os_close_spall_file(void *spall_file)
+{
+    assert(CloseHandle(spall_file));
+}
+
 internal void os_toggle_fullscreen()
 {
     // https://devblogs.microsoft.com/oldnewthing/20100412-00/?p=14353

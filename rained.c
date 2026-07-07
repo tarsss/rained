@@ -19,178 +19,6 @@ typedef struct
 
 rained_state global_state;
 
-int _fltused;
-
-#pragma function(memset)
-void *memset(void *dest, int c, size_t count)
-{
-    char *bytes = (char *)dest;
-    while (count--)
-    {
-        *bytes++ = (char)c;
-    }
-    return dest;
-}
-
-#pragma function(memcpy)
-void *memcpy(void *dest, const void *src, size_t count)
-{
-    char *dest8 = (char *)dest;
-    const char *src8 = (const char *)src;
-    while (count--)
-    {
-        *dest8++ = *src8++;
-    }
-    return dest;
-}
-
-internal arena *arena_alloc(u64 reserve, u64 commit)
-{
-    // we reserve and commit at least one page
-
-    u64 reserve_size = (reserve + PAGE_SIZE) / PAGE_SIZE * PAGE_SIZE;
-    u64 commit_size = (commit + PAGE_SIZE) / PAGE_SIZE * PAGE_SIZE;
-
-    void *base;
-
-    os_mem_reserve(reserve_size, &base);
-    os_mem_commit(base, commit_size);
-    
-    arena *header = base;
-
-    header->reserved = reserve_size;
-    header->commited = commit_size;
-    header->used = sizeof(arena_t);
-    header->base = base;
-
-    ASAN_POISON_REGION((u8*)header->base + sizeof(arena_t), commit_size)
-
-    return header;
-}
-
-internal void *arena_push_noalign(arena *arena, u64 size)
-{    
-    void *ptr = (void*)((u8*)arena->base + arena->used);
-
-    arena->used += size;
-
-    assert(arena->reserved >= arena->used);
-
-    if(arena->commited < arena->used)
-    {
-        PROFILE_BEGIN("arena commit");
-        // we need to commit more memory
-        // for now, let's just say that we allocate enough pages to fit whatever we push
-        // it will be fine if we have 2mb pages. of if we just dont shrink the arena 
-        // todo: (perfomance) use large pages (to keep tlb happy and decrease the granulatiry)
-
-        u64 commitSize = (arena->used + PAGE_SIZE) / PAGE_SIZE * PAGE_SIZE;
-
-        arena->commited = commitSize;
-
-        os_mem_commit(arena -> base, commitSize);
-        PROFILE_END();
-    }
-
-    ASAN_UNPOISON_REGION(ptr, size);
-
-    return ptr; 
-}
-
-internal void *arena_push(arena *arena, u64 size, u64 align)
-{
-    u32 rem = (64 + arena->used) % align;
-    u32 padding = rem == 0 ? 0 : align - rem;
-    u8 *mem = arena_push_noalign(arena, padding + size);
-    return mem + padding;
-}
-
-internal void arena_reset(arena *arena)
-{
-    arena->used = sizeof(arena_t);
-
-    ASAN_POISON_REGION((u8*)arena->base + sizeof(arena_t), arena->commited)
-}
-
-internal void arena_release(arena *arena)
-{
-    os_mem_free(arena->base);
-}
-
-internal void arena_commit_to_fit_used(arena *arena)
-{
-    if(arena->used > arena->commited)
-    {
-        u64 commitSize = (arena->used + PAGE_SIZE) / PAGE_SIZE * PAGE_SIZE;
-        arena->commited = commitSize;
-        os_mem_commit(arena -> base, commitSize);
-    }
-}
-
-#define arena_push_zero(a,s,al) (memset(arena_push(a, s, al), 0, s)) 
-#define arena_push_struct(a, s) (arena_push(a, sizeof(s), 8))
-#define arena_push_struct_noalign(a, s) (arena_push_noalign(a, sizeof(s)))
-#define arena_push_struct_zero(a, s) (memset(arena_push(a, sizeof(s), 8), 0, sizeof(s)))
-#define arena_copy(a, p, s) (memcpy(arena_push(a, s, 8), p, s))
-#define arena_head(a) ((void*)((u8*)a->base + a->used))
-
-internal u32 cstring_length(char *cstr)
-{
-    u32 i = 0;
-    while(cstr[i]) 
-    { 
-        i++; 
-    }
-    return i;
-}
-
-internal string arena_push_cstring(arena_t *arena, char *cstring)
-{
-    u32 l = cstring_length(cstring);
-    string str = (string)
-    {
-        .length = l,
-        .p = arena_copy(arena, cstring, l + 1),
-    };
-    str.p[str.length] = '\0';
-    return str;
-}
-
-internal b32 string_match(string a, string b)
-{
-    if(a.length != b.length)
-    {
-        return 0;
-    }
-    for(u32 i = 0; i < a.length; i++)
-    {
-        if(a.p[i] != b.p[i])
-        {
-            return 0;
-        }
-    }
-    return 1;
-}
-
-internal b32 path_match(string path_a, string path_b)
-{
-    // todo: either could be relative or absolute
-    return string_match(path_a, path_b);
-}
-
-internal string string_copy(string str, arena *arena)
-{
-    return (string)
-    {
-        .p = arena_copy(arena, str.p, str.length + 1),
-        .length = str.length
-    };
-}
-
-#define sll_push_queue(first, last, e) { if(!first) { first = e; } if(last) { last->next = e; } last = e; }
-#define sll_push(sll, e) { void *t = sll; sll = e; e->next = t; }
-#define sll_pop(sll) if(sll) { sll = sll->next; }
-
 #include "rained_clang.c"
 
 internal loaded_bitmap load_bitmap(char *path, arena_t *arena)
@@ -954,6 +782,7 @@ internal void caret_move_up_chopped(rained_view *view, caret *caret)
 
 internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount, b32 is_focused)
 {
+    PROFILE_BEGIN("draw_view");
     u32 text_color = 0x009F9F9F;
     u32 bg_color = 0x00000000;
     u32 caret_line_color = 0x001F1F1F;
@@ -1260,6 +1089,7 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
             .vsync_line_position = os_time_us() / 1000 % ctx->screen_w,
         }
     });
+    PROFILE_END();
 }
 
 // todo: there is a bug with big lines.

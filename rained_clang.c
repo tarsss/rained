@@ -5,7 +5,8 @@ typedef struct
 {
     CXFile              file;
     enum CXCursorKind   kind;
-    char                *str;
+    char                *display_name;
+    char                *spelling;
     u32                 offset, line, column, length;
 
 } ast_node;
@@ -36,7 +37,8 @@ internal enum CXChildVisitResult gather_node(CXCursor current_cursor, CXCursor p
 {
     gather_nodes_context *ctx = (gather_nodes_context *)client_data;
     
-    CXSourceRange range = clang_getCursorExtent(current_cursor);
+    CXSourceRange range = clang_Cursor_getSpellingNameRange(current_cursor,0,0);
+    //CXSourceRange range = clang_getCursorExtent(current_cursor);
     CXSourceLocation range_start = clang_getRangeStart(range);
     u32 line, column, offset;
     CXFile file;
@@ -50,8 +52,10 @@ internal enum CXChildVisitResult gather_node(CXCursor current_cursor, CXCursor p
 
     u32 length = end_offset - offset;
     enum CXCursorKind kind = clang_getCursorKind(current_cursor);
-    CXString current_display_name = clang_getCursorDisplayName(current_cursor);
-    char *str = clang_getCString(current_display_name);
+    CXString display_name = clang_getCursorDisplayName(current_cursor);
+    char *display_name_str = clang_getCString(display_name);
+    CXString spelling = clang_getCursorSpelling(current_cursor);
+    char *spelling_str = clang_getCString(spelling);
 
     if(file == end_file)
     {
@@ -59,7 +63,8 @@ internal enum CXChildVisitResult gather_node(CXCursor current_cursor, CXCursor p
         *n = (ast_node)
         {
             .file = file,
-            .str = str,
+            .display_name = display_name_str,
+            .spelling = spelling_str,
             .kind = kind,
             .offset = offset, 
             .line = line, 
@@ -152,7 +157,7 @@ internal b32 rained_clang_find_definition(rained_clang_state *state, rained_buff
     {
         CXSourceLocation loc = clang_getLocationForOffset(state->translation_unit, file, caret.position);
         CXCursor cursor = clang_getCursor(state->translation_unit, loc);
-        CXCursor definition = clang_getCursorDefinition(cursor);
+        CXCursor definition = clang_getCursorReferenced(cursor);
         if(!clang_Cursor_isNull(definition))
         {
             CXSourceLocation def_loc = clang_getCursorLocation(definition);
@@ -168,72 +173,131 @@ internal b32 rained_clang_find_definition(rained_clang_state *state, rained_buff
     return 0;
 }
 
+typedef enum highlight_token_kind
+{
+    highlight_token_none,
+    highlight_token_type,
+    highlight_token_function,
+    highlight_token_macro,
+    highlight_token_comment,
+    highlight_token_keyword
+
+} highlight_token_kind;
+
 typedef struct
 {
-    ast_node    *nodes;
-    u32         num_nodes;
+    highlight_token_kind    kind;
+    u32                     offset;
+    u32                     length;
 
-} ast_node_array;
+} highlight_token;
 
-internal ast_node_array rained_clang_buffer_ast_nodes_from_range(rained_clang_state *state, rained_buffer *buffer, u32 position, u32 length, arena *arena)
+typedef struct
+{
+    highlight_token *tokens;
+    u32             num_tokens;
+
+} highlight_token_array;
+
+internal highlight_token_array rained_clang_tokens_from_range(rained_clang_state *state, rained_buffer *buffer, u32 position, u32 length, arena *arena)
 {
     PROFILE_BEGIN("nodes_from_range");
     CXFile file = clang_getFile(state->translation_unit, buffer->path.p);
-    ast_node *nodes = arena_head(arena);
-    u32 num_nodes = 0;
+
+    highlight_token *tokens = arena_head(arena);
+    u32 num_tokens = 0;
+
     for(u32 i = 0; i < state->num_nodes; i++)
     {
-        if(clang_File_isEqual(state->nodes[i].file, file))
+        ast_node node = state->nodes[i];
+        if(clang_File_isEqual(node.file, file))
         {
-            ast_node *n = arena_push_struct_noalign(arena, ast_node);
-            *n = state->nodes[i];
-            num_nodes++;
+            highlight_token t;
+            switch(node.kind)
+            {
+                case CXCursor_CallExpr:
+                case CXCursor_FunctionDecl:
+                {
+                    t.kind = highlight_token_function;
+                    break;
+                }
+                case CXCursor_MacroDefinition:
+                case CXCursor_MacroExpansion:
+                case CXCursor_EnumConstantDecl:
+                {
+                    t.kind = highlight_token_macro;
+                    break;
+                }
+                case CXCursor_TypeRef:
+                case CXCursor_StructDecl:
+                case CXCursor_TypedefDecl:
+                case CXCursor_EnumDecl:
+                {
+                    t.kind = highlight_token_type;
+                    break;
+                }
+                default: 
+                {
+                    continue;
+                }
+            }
+            t.offset = node.offset;
+            t.length = node.length;
+            *((highlight_token*)arena_push_struct_noalign(arena, highlight_token)) = t;
+            num_tokens++;
         }
     }
     PROFILE_END();
-    return (ast_node_array)
-    {
-        .nodes = nodes,
-        .num_nodes = num_nodes
-    };
-}
 
-internal ast_node_array rained_clang_buffer_ast_nodes_from_range2(rained_clang_state *state, rained_buffer *buffer, u32 position, u32 length, arena *arena)
-{
-    PROFILE_BEGIN("nodes_from_range2");
-    CXFile file = clang_getFile(state->translation_unit, buffer->path.p);
+    PROFILE_BEGIN("clang_tokenize");
     CXSourceLocation begin = clang_getLocationForOffset(state->translation_unit, file, position);
     CXSourceLocation end = clang_getLocationForOffset(state->translation_unit, file, position + length);
+
     CXSourceRange range = clang_getRange(begin, end);
-    CXToken *tokens = 0;
-    u32 num_tokens = 0;
-    clang_tokenize(state->translation_unit, range, &tokens, &num_tokens);
-    CXCursor *cursors = arena_push(arena, sizeof(CXCursor) * num_tokens, 8);
-    clang_annotateTokens(state->translation_unit, tokens, num_tokens, cursors);
-    ast_node *nodes = arena_head(arena);
-    for(u32 i = 0; i < num_tokens; i++)
+    CXToken *cxtokens = 0;
+    u32 num_cxtokens = 0;
+    clang_tokenize(state->translation_unit, range, &cxtokens, &num_cxtokens);
+
+    for(u32 i = 0; i < num_cxtokens; i++)
     {
-        enum CXCursorKind kind = clang_getCursorKind(cursors[i]);
-        CXSourceRange token_range = clang_getTokenExtent(state->translation_unit, tokens[i]);
+        CXToken cxtoken = cxtokens[i];
+        CXTokenKind kind = clang_getTokenKind(cxtoken);
+        highlight_token t;
+        switch(kind)
+        {
+            case CXToken_Keyword:
+            {
+                t.kind = highlight_token_keyword;
+                break;
+            }
+            case CXToken_Comment:
+            {
+                t.kind = highlight_token_comment;
+                break;
+            }
+            default:
+            {
+                continue;
+            }
+        }
+        CXSourceRange token_range = clang_getTokenExtent(state->translation_unit, cxtoken);
         CXSourceLocation token_start = clang_getRangeStart(token_range);
         CXSourceLocation token_end = clang_getRangeEnd(token_range);
         u32 token_start_offset, token_end_offset;
         clang_getFileLocation(token_start, 0, 0, 0, &token_start_offset);
         clang_getFileLocation(token_end, 0, 0, 0, &token_end_offset);
 
-        ast_node *n = arena_push_struct_noalign(arena, ast_node);
-        *n = (ast_node)
-        {
-            .kind = kind,
-            .file = file,
-            .offset = token_start_offset,
-            .length = token_end_offset - token_start_offset
-        };
+        t.offset = token_start_offset;
+        t.length = token_end_offset - token_start_offset;
+        *((highlight_token*)arena_push_struct_noalign(arena, highlight_token)) = t;
+        num_tokens++;
     }
+    clang_disposeTokens(state->translation_unit, cxtokens, num_cxtokens);
     PROFILE_END();
-    return (ast_node_array)
+
+    return (highlight_token_array)
     {
-        .nodes = nodes,
-        .num_nodes = num_tokens,
+        .tokens = tokens,
+        .num_tokens = num_tokens
     };
 }

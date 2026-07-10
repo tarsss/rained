@@ -1025,31 +1025,30 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
     if(!view->is_a_command_view && view->buffer->path.p)
     {
         u32 view_length = chopped.lines[chopped.count - 1].pos_in_text + chopped.lines[chopped.count - 1].length - p;
-        //ast_node_array arr = rained_clang_buffer_ast_nodes_from_range(global_state.clang_state, view->buffer, p, view_length, global_state.frame_arena);
-        ast_node_array arr = rained_clang_buffer_ast_nodes_from_range2(global_state.clang_state, view->buffer, p, view_length, global_state.frame_arena);
+        highlight_token_array arr = rained_clang_tokens_from_range(global_state.clang_state, view->buffer, p, view_length, global_state.frame_arena);
     
         u32 fuckoff;
-        for(u32 i = 0; i < arr.num_nodes; i++)
+        for(u32 i = 0; i < arr.num_tokens; i++)
         {
-            ast_node n = arr.nodes[i];
+            highlight_token t = arr.tokens[i];
             u32 color = 0;
     
-            switch(n.kind)
+            switch(t.kind)
             {
-                case CXCursor_TypeRef:
-                    color = 0x000000FF;
-                break;
-
-                case CXCursor_CallExpr:
+                case highlight_token_function:
                     color = 0x0000FF00;
                 break;
-
-                case CXCursor_FunctionDecl:
-                    color = 0x00FF0000;
-                break;
-
-                case CXCursor_MacroExpansion:
+                case highlight_token_macro:
                     color = 0x0000FFFF;
+                break;
+                case highlight_token_type:
+                    color = 0x000000FF;
+                break;
+                case highlight_token_keyword:
+                    color = 0x000080FF;
+                break;
+                case highlight_token_comment:
+                    color = 0x0F5F5F5F;
                 break;
     
                 default:
@@ -1062,7 +1061,7 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
             {
                 chopped_line *l = &chopped.lines[offset_lines + y];
     
-                for(i32 j = max(n.offset, l->pos_in_text); j < min(l->pos_in_text + l->length, n.offset + n.length); j++)
+                for(i32 j = max(t.offset, l->pos_in_text); j < min(l->pos_in_text + l->length, t.offset + t.length); j++)
                 {
                     i32 x = j - l->pos_in_text;
                     u32 cell_index = x + y * view->width_cells;

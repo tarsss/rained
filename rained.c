@@ -780,13 +780,19 @@ internal void caret_move_up_chopped(rained_view *view, caret *caret)
     caret_step_step_line_columns(view->buffer, caret, min(caret->wish_column, list.lines[list.count - 1].length));
 }
 
+#define d_color_text                0x00ebdbb2
+#define d_color_bg                  0x00141718
+#define d_color_caret_line          0x001F1F1F
+#define d_color_selection           0x00545e52
+#define d_color_token_function      0x008ec07c
+#define d_color_token_macro         0x00fabd2f
+#define d_color_token_type          0x00fabd2f
+#define d_color_token_keyword       0x00fe8019
+#define d_color_token_comment       0x00928374
+
 internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount, b32 is_focused)
 {
     PROFILE_BEGIN("draw_view");
-    u32 text_color = 0x009F9F9F;
-    u32 bg_color = 0x00000000;
-    u32 caret_line_color = 0x001F1F1F;
-    u32 selection_color = 0x00545e52;
 
     u32 cell_width = global_state.font.glyph_width;
     u32 cell_height = global_state.font.glyph_height;
@@ -810,7 +816,7 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
             cells[j] = (cell) 
             { 
                 .atlas_index = view->buffer->path.p[j] - 32,
-                .text_color = text_color,
+                .text_color = d_color_text,
                 .bg_color = 0x00545e52 / 2,
             };
         }
@@ -945,7 +951,7 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
     {
         cells[i] = (cell) 
         {
-            .bg_color = bg_color
+            .bg_color = d_color_bg
         };
     }
 
@@ -978,8 +984,8 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
             cells[cell_index] = (cell) 
             { 
                 .atlas_index = c - 32,
-                .text_color = text_color,
-                .bg_color = bg_color,
+                .text_color = d_color_text,
+                .bg_color = d_color_bg,
             };
         }
 
@@ -991,7 +997,7 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
             {
                 for(u32 j = 0; j < view->width_cells; j++)
                 {
-                    cells[y * view->width_cells + j].bg_color = caret_line_color;
+                    cells[y * view->width_cells + j].bg_color = d_color_caret_line;
                 }
             }
             if(caret->selection_active)
@@ -1000,7 +1006,7 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
                 u32 end = min((l->pos_in_text + l->length), max(caret->position, caret->selection_pos));
                 for(u32 j = start; j < end; j++)
                 {
-                    cells[y * view->width_cells + j - l->pos_in_text].bg_color = selection_color;
+                    cells[y * view->width_cells + j - l->pos_in_text].bg_color = d_color_selection;
                 }
             }
         }
@@ -1019,13 +1025,12 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
             }
         }
     }
-
-#if 1
     
     if(!view->is_a_command_view && view->buffer->path.p)
     {
         u32 view_length = chopped.lines[chopped.count - 1].pos_in_text + chopped.lines[chopped.count - 1].length - p;
-        highlight_token_array arr = rained_clang_tokens_from_range(global_state.clang_state, view->buffer, p, view_length, global_state.frame_arena);
+        //highlight_token_array arr = rained_clang_tokens_from_range(global_state.clang_state, view->buffer, p, view_length, global_state.frame_arena);
+        highlight_token_array arr = rained_clang_query_tokens_for_file(global_state.clang_state, view->buffer);
     
         u32 fuckoff;
         for(u32 i = 0; i < arr.num_tokens; i++)
@@ -1035,21 +1040,11 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
     
             switch(t.kind)
             {
-                case highlight_token_function:
-                    color = 0x0000FF00;
-                break;
-                case highlight_token_macro:
-                    color = 0x0000FFFF;
-                break;
-                case highlight_token_type:
-                    color = 0x000000FF;
-                break;
-                case highlight_token_keyword:
-                    color = 0x000080FF;
-                break;
-                case highlight_token_comment:
-                    color = 0x0F5F5F5F;
-                break;
+                case highlight_token_function: color = d_color_token_function; break;
+                case highlight_token_macro: color = d_color_token_macro; break;
+                case highlight_token_type: color = d_color_token_type; break;
+                case highlight_token_keyword: color = d_color_token_keyword; break;
+                case highlight_token_comment: color = d_color_token_comment; break;
     
                 default:
                 {
@@ -1072,8 +1067,6 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
         }
 
     }
-
-#endif
 
     push_renderer_command(ctx, (renderer_command)
     {

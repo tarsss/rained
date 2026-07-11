@@ -1,24 +1,5 @@
 #include "rained.h"
-#include "clang-c/Index.h"
-
-typedef struct
-{
-    CXFile              file;
-    enum CXCursorKind   kind;
-    char                *display_name;
-    char                *spelling;
-    u32                 offset, line, column, length;
-
-} ast_node;
-
-struct rained_clang_state
-{
-    CXIndex             index;
-    CXTranslationUnit   translation_unit;
-    arena               *nodes_arena;
-    ast_node            *nodes;
-    u32                 num_nodes;
-};
+#include "rained_clang.h"
 
 void rained_clang_test_visit_inclusion(CXFile included_file, CXSourceLocation *inclusion_stack, unsigned include_len, CXClientData client_data)
 {
@@ -83,6 +64,8 @@ internal void rained_clang_parse_the_whole_thing(rained_clang_state *state)
     {
         clang_disposeTranslationUnit(state->translation_unit);
         arena_reset(state->nodes_arena);
+        arena_reset(state->token_cache_arena);
+        state->token_cache = 0;
     }
     const char *argv[] = 
     {
@@ -147,6 +130,7 @@ internal void rained_clang_init(rained_clang_state *state)
 {
     state->index = clang_createIndex(0, 0);
     state->nodes_arena = arena_alloc(gb(1), mb(1));
+    state->token_cache_arena = arena_alloc(gb(1), mb(1));
     rained_clang_parse_the_whole_thing(state);
 }
 
@@ -172,32 +156,6 @@ internal b32 rained_clang_find_definition(rained_clang_state *state, rained_buff
     }
     return 0;
 }
-
-typedef enum highlight_token_kind
-{
-    highlight_token_none,
-    highlight_token_type,
-    highlight_token_function,
-    highlight_token_macro,
-    highlight_token_comment,
-    highlight_token_keyword
-
-} highlight_token_kind;
-
-typedef struct
-{
-    highlight_token_kind    kind;
-    u32                     offset;
-    u32                     length;
-
-} highlight_token;
-
-typedef struct
-{
-    highlight_token *tokens;
-    u32             num_tokens;
-
-} highlight_token_array;
 
 internal highlight_token_array rained_clang_tokens_from_range(rained_clang_state *state, rained_buffer *buffer, u32 position, u32 length, arena *arena)
 {
@@ -300,4 +258,27 @@ internal highlight_token_array rained_clang_tokens_from_range(rained_clang_state
         .tokens = tokens,
         .num_tokens = num_tokens
     };
+}
+
+internal highlight_token_array rained_clang_query_tokens_for_file(rained_clang_state *state, rained_buffer *buffer)
+{
+    CXFile file = clang_getFile(state->translation_unit, buffer->path.p);
+    file_and_highlight_token_array *entry = state->token_cache;
+    while(entry)
+    {
+        if(clang_File_isEqual(file, entry->file))
+        {
+            return entry->arr;
+        }
+        entry = entry->next;
+    }
+    
+    file_and_highlight_token_array *new_entry = arena_push_struct(state->token_cache_arena, file_and_highlight_token_array);
+    *new_entry = (file_and_highlight_token_array)
+    {
+        .file = file,
+        .arr = rained_clang_tokens_from_range(state, buffer, 0, buffer->text_size, state->token_cache_arena)
+    };
+    sll_push(state->token_cache, new_entry);
+    return new_entry->arr;
 }

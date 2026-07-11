@@ -39,10 +39,10 @@ uint get_cell_index(int2 pos)
 
 float4 unpack_color(int rgba)
 {
-    float r = (rgba & 0x000000FF);
-    float g = (rgba & 0x0000FF00) >> 8;
-    float b = (rgba & 0x00FF0000) >> 16;
     float a = (rgba & 0xFF000000) >> 24;
+    float r = (rgba & 0x00FF0000) >> 16;
+    float g = (rgba & 0x0000FF00) >> 8;
+    float b = (rgba & 0x000000FF);
     return float4(r,g,b,a) / 255.0f;
 }
 

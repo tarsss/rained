@@ -280,6 +280,7 @@ internal void carets_insert_characters(rained_view *view, text_edit_insert inser
         undo_buffer_push(view->buffer, e);
     }
     view->fit_caret = 1;
+    view->buffer->is_dirty = 1;
 }
 
 // todo: don't push undo when each num_to_remove = 0
@@ -332,6 +333,7 @@ internal void carets_remove_characters(rained_view *view, text_edit_delete delet
         undo_buffer_push(view->buffer, e);
     }
     view->fit_caret = 1;
+    view->buffer->is_dirty = 1;
 }
 
 internal void caret_spawn_new_below(rained_view *view)
@@ -1399,7 +1401,7 @@ internal renderer_command *draw(rained_input *input)
                     }
                 }
             }
-        }        
+        }
 
         if(e.type == INPUT_EVENT_TEXT)
         {
@@ -1564,6 +1566,19 @@ internal renderer_command *draw(rained_input *input)
         merge_overlapping_carets_in_a_slow_way(view);
     }
 
+    b32 any_buffer_is_dirty = 0;
+    rained_buffer *buffer = global_state.buffers;
+    while(buffer)
+    {
+        any_buffer_is_dirty |= buffer->is_dirty;
+        buffer->is_dirty = 0;
+        buffer = buffer->next;
+    }
+    if(any_buffer_is_dirty)
+    {
+        rained_clang_parse_the_whole_thing(global_state.clang_state, global_state.buffers);
+    }
+    
     // todo: doesn't work the way i want it to when mouse leaves the client area. im not sure what to do about this right now
     if(global_state.mouse_drag_tile)
     {

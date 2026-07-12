@@ -33,6 +33,7 @@ char                        buf[64]; // for sprintf, dumb
 u64                         frame_start;
 u32                         cell_buffer_count;
 
+
 internal void os_mem_reserve(u64 size, void **address)
 {
     *address = VirtualAlloc(0, size, MEM_RESERVE, PAGE_READWRITE);

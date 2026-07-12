@@ -58,15 +58,19 @@ internal enum CXChildVisitResult gather_node(CXCursor current_cursor, CXCursor p
     return CXChildVisit_Recurse;
 }
 
-internal void rained_clang_parse_the_whole_thing(rained_clang_state *state)
+internal void rained_clang_parse_the_whole_thing(rained_clang_state *state, rained_buffer *buffers)
 {
     if(state->translation_unit)
     {
         clang_disposeTranslationUnit(state->translation_unit);
         arena_reset(state->nodes_arena);
+        state->nodes = 0;
+        state->num_nodes = 0;
         arena_reset(state->token_cache_arena);
         state->token_cache = 0;
+        state->translation_unit = 0;
     }
+
     const char *argv[] = 
     {
         "-I", "C:\\llvm\\include\\",
@@ -81,8 +85,26 @@ internal void rained_clang_parse_the_whole_thing(rained_clang_state *state)
     };
     i32 argc = lengthof(argv);
 
+    arena *scratch = arena_alloc(gb(1), mb(1));
+    
+    u32 num_unsaved_files = 0;
+    struct CXUnsavedFile *unsaved_files = arena_head(scratch);
+    rained_buffer *buffer = buffers;
+    while(buffer)
+    {
+        struct CXUnsavedFile *f = arena_push_struct_noalign(scratch, struct CXUnsavedFile);
+        *f = (struct CXUnsavedFile)
+        {
+            .Filename = buffer->path.p,
+            .Contents = buffer->text,
+            .Length = buffer->text_size,
+        };
+        num_unsaved_files++;
+        buffer = buffer->next;
+    }
+
     u32 options = CXTranslationUnit_DetailedPreprocessingRecord | CXTranslationUnit_KeepGoing;
-    enum CXErrorCode err = clang_parseTranslationUnit2(state->index, "rained_win32.c", argv, argc,0,0, options, &state->translation_unit);
+    enum CXErrorCode err = clang_parseTranslationUnit2(state->index, "rained_win32.c", argv, argc, unsaved_files, num_unsaved_files, options, &state->translation_unit);
     assert(err == CXError_Success);
 
     u32 n = clang_getNumDiagnostics(state->translation_unit);
@@ -123,6 +145,9 @@ internal void rained_clang_parse_the_whole_thing(rained_clang_state *state)
     };
     clang_visitChildren(cursor, &gather_node, ctx);
     state->num_nodes = ctx->num_nodes;
+
+    arena_release(scratch);
+
     PROFILE_END();
 }
 
@@ -131,7 +156,7 @@ internal void rained_clang_init(rained_clang_state *state)
     state->index = clang_createIndex(0, 0);
     state->nodes_arena = arena_alloc(gb(1), mb(1));
     state->token_cache_arena = arena_alloc(gb(1), mb(1));
-    rained_clang_parse_the_whole_thing(state);
+    rained_clang_parse_the_whole_thing(state, 0);
 }
 
 internal b32 rained_clang_find_definition(rained_clang_state *state, rained_buffer *buffer, caret caret, u32 *position, string *file_path, arena *arena)

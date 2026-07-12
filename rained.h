@@ -332,6 +332,7 @@ struct rained_buffer
     arena               *undo_buffer_arena;
     undo_buffer_entry   *undo_buffer_tail;
     undo_buffer_entry   *undo_buffer_position;
+    b32                 is_dirty;
     rained_buffer       *next;
 };
 

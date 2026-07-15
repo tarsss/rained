@@ -1,6 +1,16 @@
 #include "rained.h"
 #include "rained_clang.h"
 
+internal void rained_clang_lock(rained_clang_state *state)
+{
+    while(__sync_val_compare_and_swap(&state->lock, 1, 0));
+}
+
+internal void rained_clang_unlock(rained_clang_state *state)
+{
+    state->lock = 0;
+}
+
 void rained_clang_test_visit_inclusion(CXFile included_file, CXSourceLocation *inclusion_stack, unsigned include_len, CXClientData client_data)
 {
     char *str = clang_getCString(clang_getFileName(included_file));
@@ -58,6 +68,14 @@ internal enum CXChildVisitResult gather_node(CXCursor current_cursor, CXCursor p
     return CXChildVisit_Recurse;
 }
 
+internal void rained_clang_schedule_reparse(rained_clang_state *state, rained_buffer *buffers)
+{
+    rained_clang_lock(state);
+    state->reparse = 1;
+    state->reparse_buffers = buffers;
+    rained_clang_unlock(state);
+}
+
 internal void rained_clang_parse_the_whole_thing(rained_clang_state *state, rained_buffer *buffers)
 {
     if(state->translation_unit)
@@ -92,14 +110,17 @@ internal void rained_clang_parse_the_whole_thing(rained_clang_state *state, rain
     rained_buffer *buffer = buffers;
     while(buffer)
     {
-        struct CXUnsavedFile *f = arena_push_struct_noalign(scratch, struct CXUnsavedFile);
-        *f = (struct CXUnsavedFile)
+        if(buffer->path.p)
         {
-            .Filename = buffer->path.p,
-            .Contents = buffer->text,
-            .Length = buffer->text_size,
-        };
-        num_unsaved_files++;
+            struct CXUnsavedFile *f = arena_push_struct_noalign(scratch, struct CXUnsavedFile);
+            *f = (struct CXUnsavedFile)
+            {
+                .Filename = buffer->path.p,
+                .Contents = buffer->text,
+                .Length = buffer->text_size,
+            };
+            num_unsaved_files++;   
+        }
         buffer = buffer->next;
     }
 
@@ -151,16 +172,9 @@ internal void rained_clang_parse_the_whole_thing(rained_clang_state *state, rain
     PROFILE_END();
 }
 
-internal void rained_clang_init(rained_clang_state *state)
-{
-    state->index = clang_createIndex(0, 0);
-    state->nodes_arena = arena_alloc(gb(1), mb(1));
-    state->token_cache_arena = arena_alloc(gb(1), mb(1));
-    rained_clang_parse_the_whole_thing(state, 0);
-}
-
 internal b32 rained_clang_find_definition(rained_clang_state *state, rained_buffer *buffer, caret caret, u32 *position, string *file_path, arena *arena)
 {
+    rained_clang_lock(state);
     CXFile file = clang_getFile(state->translation_unit, buffer->path.p);
     if(file)
     {
@@ -176,9 +190,11 @@ internal b32 rained_clang_find_definition(rained_clang_state *state, rained_buff
             CXString cxstr = clang_getFileName(def_file);
             *file_path = arena_push_cstring(arena, (char*)clang_getCString(cxstr));
             clang_disposeString(cxstr);
+            rained_clang_unlock(state);
             return 1;
         }
     }
+    rained_clang_unlock(state);
     return 0;
 }
 
@@ -287,23 +303,64 @@ internal highlight_token_array rained_clang_tokens_from_range(rained_clang_state
 
 internal highlight_token_array rained_clang_query_tokens_for_file(rained_clang_state *state, rained_buffer *buffer)
 {
-    CXFile file = clang_getFile(state->translation_unit, buffer->path.p);
+    rained_clang_lock(state);
+
     file_and_highlight_token_array *entry = state->token_cache;
     while(entry)
     {
-        if(clang_File_isEqual(file, entry->file))
+        if(entry->buffer == buffer)
         {
             return entry->arr;
         }
         entry = entry->next;
     }
+
+    state->cache_tokens = 1;
+    state->cache_tokens_buffer = buffer;
+    rained_clang_unlock(state);
     
-    file_and_highlight_token_array *new_entry = arena_push_struct(state->token_cache_arena, file_and_highlight_token_array);
-    *new_entry = (file_and_highlight_token_array)
+    return (highlight_token_array)
     {
-        .file = file,
-        .arr = rained_clang_tokens_from_range(state, buffer, 0, buffer->text_size, state->token_cache_arena)
+        .num_tokens = 0
     };
-    sll_push(state->token_cache, new_entry);
-    return new_entry->arr;
+}
+
+typedef struct
+{
+    rained_clang_state *state;
+
+} rained_clang_thread_context;
+
+internal void rained_clang_thread_entry_point(void *data)
+{
+    rained_clang_thread_context *ctx = (rained_clang_thread_context *)data;
+    ctx->state->index = clang_createIndex(0, 0);
+    ctx->state->nodes_arena = arena_alloc(gb(1), mb(1));
+    ctx->state->token_cache_arena = arena_alloc(gb(1), mb(1));
+
+    while(1)
+    {
+        rained_clang_lock(ctx->state);
+        if(ctx->state->reparse)
+        {
+            ctx->state->reparse = 0;
+            rained_clang_unlock(ctx->state);
+            rained_clang_parse_the_whole_thing(ctx->state, ctx->state->reparse_buffers);
+        }
+
+        rained_clang_lock(ctx->state);
+        if(ctx->state->cache_tokens)
+        {
+            ctx->state->cache_tokens = 0;
+            file_and_highlight_token_array *new_entry = arena_push_struct(ctx->state->token_cache_arena, file_and_highlight_token_array);
+            *new_entry = (file_and_highlight_token_array)
+            {
+                .buffer = ctx->state->cache_tokens_buffer,
+                .arr = rained_clang_tokens_from_range(ctx->state, ctx->state->cache_tokens_buffer, 0, ctx->state->cache_tokens_buffer->text_size, ctx->state->token_cache_arena)
+            };
+            sll_push(ctx->state->token_cache, new_entry);
+        }
+        rained_clang_unlock(ctx->state);
+
+    }
 }

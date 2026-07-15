@@ -375,6 +375,33 @@ internal void os_debug_output_string(char *str)
     OutputDebugStringA(str);
 }
 
+typedef struct
+{
+    void (* routine)(void *);
+    void *data;
+
+} win32_thread_context;
+
+internal DWORD WINAPI win32_thread_entry_point(LPVOID lpParameter)
+{
+    win32_thread_context *ctx = (win32_thread_context *)lpParameter;
+    ctx->routine(ctx->data);
+    return 0;
+}
+
+internal void os_create_thread(void (* routine)(void *), void *data, c16 *name, arena *arena)
+{
+    win32_thread_context *ctx = arena_push_struct(arena, win32_thread_context);
+    *ctx = (win32_thread_context)
+    {
+        .routine = routine,
+        .data = data,
+    };
+    HANDLE handle = CreateThread(0, 0, &win32_thread_entry_point, ctx, CREATE_SUSPENDED, 0);
+    SetThreadDescription(handle, name);
+    ResumeThread(handle);
+}
+
 static input_event input_queue[128];
 static u32         input_queue_count;
 

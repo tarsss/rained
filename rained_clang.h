@@ -29,7 +29,7 @@ typedef struct
 typedef struct file_and_highlight_token_array file_and_highlight_token_array;
 struct file_and_highlight_token_array
 {
-    CXFile                          file;
+    rained_buffer                   *buffer;
     highlight_token_array           arr;
     file_and_highlight_token_array  *next;
 };
@@ -46,6 +46,14 @@ typedef struct
 
 struct rained_clang_state
 {
+    u64                                 lock;
+
+    b32                                 reparse;
+    rained_buffer                       *reparse_buffers;
+
+    b32                                 cache_tokens;
+    rained_buffer                       *cache_tokens_buffer;
+
     CXIndex                             index;
     CXTranslationUnit                   translation_unit;
     arena                               *nodes_arena;

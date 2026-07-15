@@ -1213,9 +1213,17 @@ internal renderer_command *draw(rained_input *input)
         rained_buffer *b1 = open_buffer_from_file(&global_state, arena_push_cstring(global_state.frame_arena, ".\\rained_win32.c"));
         rained_view *v0 = tile_push_view(global_state.tile_left, b0);
         rained_view *v1 = tile_push_view(global_state.tile_right, b1);
-        global_state.clang_state = arena_push_struct_zero(global_state.forever_arena, rained_clang_state);
-        rained_clang_init(global_state.clang_state);
         global_state.font_size = 18;
+        
+        global_state.clang_state = arena_push_struct_zero(global_state.forever_arena, rained_clang_state);
+        arena *clang_arena = arena_alloc(gb(1), mb(1));
+        rained_clang_thread_context *ctx = arena_push_struct(clang_arena, rained_clang_thread_context);
+        *ctx = (rained_clang_thread_context)
+        {
+            .state = global_state.clang_state,
+        };
+        os_create_thread(&rained_clang_thread_entry_point, ctx, L"rained_clang_thread", clang_arena);
+        rained_clang_schedule_reparse(global_state.clang_state, global_state.buffers);
     }
     arena_reset(global_state.frame_arena);
 
@@ -1576,7 +1584,7 @@ internal renderer_command *draw(rained_input *input)
     }
     if(any_buffer_is_dirty)
     {
-        rained_clang_parse_the_whole_thing(global_state.clang_state, global_state.buffers);
+        rained_clang_schedule_reparse(global_state.clang_state, global_state.buffers);
     }
     
     // todo: doesn't work the way i want it to when mouse leaves the client area. im not sure what to do about this right now

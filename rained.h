@@ -36,6 +36,9 @@ typedef float       f32;
 typedef double      f64;
 typedef int8_t      b8;
 typedef int32_t     b32;
+typedef u8          c8;
+typedef u16         c16;
+
 
 #define kb(n) ((u64)n << 10)
 #define mb(n) ((u64)n << 20)
@@ -375,7 +378,7 @@ internal void os_clipboard_set(string text);
 internal font_atlas os_make_font_atlas(u32 size, arena *scratch);
 internal void os_release_font_atlas(font_atlas atlas);
 internal void os_debug_output_string(char *str);
-
+internal void os_create_thread(void (* routine)(void *), void *data, c16 *name, arena *arena);
 
 int _fltused;
 

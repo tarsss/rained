@@ -56,9 +56,6 @@ struct rained_clang_state
 
     CXIndex                             index;
     CXTranslationUnit                   translation_unit;
-    arena                               *nodes_arena;
-    ast_node                            *nodes;
-    u32                                 num_nodes;
     arena                               *token_cache_arena;
     file_and_highlight_token_array      *token_cache;
 };

@@ -1,13 +1,14 @@
-#include "rained.c"
-
 #define COBJMACROS
 #define WIN32_LEAN_AND_MEAN
+
 #include <d3d11.h>
 #include <dxgi1_3.h>
 #include <dxgidebug.h>
-#include "cdwrite.h"
-#include "debugapi.h"
+#include <debugapi.h>
 #include "shader.h"
+#include "cdwrite.h"
+; // FUCK OFFFFFFFFFF CLANG
+#include "rained.c"
 
 HWND                        window;
 WINDOWPLACEMENT             windowedPlacement;
@@ -32,7 +33,7 @@ b32                         lmb, rmb, mmb;
 char                        buf[64]; // for sprintf, dumb
 u64                         frame_start;
 u32                         cell_buffer_count;
-
+DWORD                       thread_context_tls_index;
 
 internal void os_mem_reserve(u64 size, void **address)
 {
@@ -375,29 +376,44 @@ internal void os_debug_output_string(char *str)
     OutputDebugStringA(str);
 }
 
-typedef struct
+internal rained_thread_context *rained_alloc_thread_context()
 {
-    void (* routine)(void *);
-    void *data;
+    arena *arena = arena_alloc(mb(1), kb(4));
+    rained_thread_context *ctx = arena_push_struct(arena, rained_thread_context);
+    ctx->arena = arena;    
+    return ctx;
+}
 
-} win32_thread_context;
+internal void rained_init_thread_context(rained_thread_context *ctx)
+{
+    TlsSetValue(thread_context_tls_index, ctx);
+#ifdef SPALL_ENABLED
+    ctx->spall_buffer = spall_buffer_alloc_and_init(ctx->tid);
+#endif
+}
+
+internal rained_thread_context *rained_get_thread_context()
+{
+    return TlsGetValue(thread_context_tls_index);
+}
 
 internal DWORD WINAPI win32_thread_entry_point(LPVOID lpParameter)
 {
-    win32_thread_context *ctx = (win32_thread_context *)lpParameter;
+    rained_thread_context *ctx = (rained_thread_context *)lpParameter;
+    rained_init_thread_context(ctx);
     ctx->routine(ctx->data);
+    spall_buffer_exit_and_free(&ctx->spall_buffer);
+    arena_release(ctx->arena);
     return 0;
 }
 
-internal void os_create_thread(void (* routine)(void *), void *data, c16 *name, arena *arena)
+internal void os_create_thread(void (* routine)(void *), void *data, c16 *name)
 {
-    win32_thread_context *ctx = arena_push_struct(arena, win32_thread_context);
-    *ctx = (win32_thread_context)
-    {
-        .routine = routine,
-        .data = data,
-    };
+    rained_thread_context *ctx = rained_alloc_thread_context();
     HANDLE handle = CreateThread(0, 0, &win32_thread_entry_point, ctx, CREATE_SUSPENDED, 0);
+    ctx->routine = routine;
+    ctx->data = data;
+    ctx->tid = GetThreadId(handle);
     SetThreadDescription(handle, name);
     ResumeThread(handle);
 }
@@ -567,6 +583,10 @@ internal void busy_wait(u64 time_us)
 
 void __stdcall WinMainCRTStartup()
 {
+    thread_context_tls_index = TlsAlloc();
+    rained_thread_context *thread_context = rained_alloc_thread_context();
+    rained_init_thread_context(thread_context);
+
     LPWSTR command_line = GetCommandLineW();
     i32 argc;
     LPWSTR *argv = CommandLineToArgvW(command_line, &argc);
@@ -611,6 +631,8 @@ void __stdcall WinMainCRTStartup()
         0);
     assert(window);
 
+    os_toggle_fullscreen();
+    
     D3D_FEATURE_LEVEL levels[] = 
     {
         D3D_FEATURE_LEVEL_11_0
@@ -955,7 +977,7 @@ void __stdcall WinMainCRTStartup()
         PROFILE_END();
     }
     #ifdef SPALL_ENABLED
-    spall_end_profiling();
+    spall_buffer_flush(&spall_profile, &rained_get_thread_context()->spall_buffer);
     #endif
     ExitProcess(0);
 }

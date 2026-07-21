@@ -17,6 +17,35 @@
     #define ASAN_UNPOISON_REGION(addr, size)
 #endif
 
+int _fltused;
+
+#pragma function(memset)
+void *memset(void *dest, int c, size_t count)
+{
+    char *bytes = (char *)dest;
+    while (count--)
+    {
+        *bytes++ = (char)c;
+    }
+    return dest;
+}
+
+#pragma function(memcpy)
+void *memcpy(void *dest, const void *src, size_t count)
+{
+    char *dest8 = (char *)dest;
+    const char *src8 = (const char *)src;
+    while (count--)
+    {
+        *dest8++ = *src8++;
+    }
+    return dest;
+}
+
+#ifdef SPALL_ENABLED
+#include "spall.h"
+#endif
+
 #define assert(a) if(!(a)) { *(volatile int*)0 = 0; }
 #define assert_hr(a) assert(SUCCEEDED(a))
 #define alignof(n) (_Alignof(n))
@@ -43,11 +72,10 @@ typedef u16         c16;
 #define kb(n) ((u64)n << 10)
 #define mb(n) ((u64)n << 20)
 #define gb(n) ((u64)n << 30)
+#define tb(n) ((u64)n << 40)
 
 #define min(a,b) (a < b ? a : b)
 #define max(a,b) (a > b ? a : b)
-
-#define tb(n) ((u64)n << 40)
 
 #define PAGE_SIZE 4096
 
@@ -69,31 +97,6 @@ typedef struct
     u64     used;
 
 } arena, arena_t;
-
-#pragma pack(push, 1)
-typedef struct
-{
-    u16     FileType;        /* File type, always 4D42h ("BM") */
-	u32     FileSize;        /* Size of the file in bytes */
-	u16     Reserved1;       /* Always 0 */
-	u16     Reserved2;       /* Always 0 */
-	u32     BitmapOffset;    /* Starting position of image data in bytes */
-	u32     Size;            /* Size of this header in bytes */
-	u32     Width;           /* Image width in pixels */
-	u32     Height;          /* Image height in pixels */
-	u16     Planes;          /* Number of color planes */
-	u16     BitsPerPixel;    /* Number of bits per pixel */
-	u32     Compression;     /* Compression methods used */
-	u32     SizeOfBitmap;    /* Size of bitmap in bytes */
-} bitmap_header;
-#pragma pack(pop)
-
-typedef struct
-{
-    bitmap_header   *header;
-    void            *data;
-
-} loaded_bitmap;
 
 typedef enum INPUT_EVENT
 {
@@ -362,7 +365,6 @@ struct rained_tile
     rained_tile         *next;
 };
 
-
 internal void os_mem_reserve(u64 size, void **address);
 internal void os_mem_commit(void *reserved, u64 size);
 internal void os_mem_free(void *base);
@@ -378,32 +380,22 @@ internal void os_clipboard_set(string text);
 internal font_atlas os_make_font_atlas(u32 size, arena *scratch);
 internal void os_release_font_atlas(font_atlas atlas);
 internal void os_debug_output_string(char *str);
-internal void os_create_thread(void (* routine)(void *), void *data, c16 *name, arena *arena);
+internal void os_create_thread(void (* routine)(void *), void *data, c16 *name);
 
-int _fltused;
-
-#pragma function(memset)
-void *memset(void *dest, int c, size_t count)
+typedef struct
 {
-    char *bytes = (char *)dest;
-    while (count--)
-    {
-        *bytes++ = (char)c;
-    }
-    return dest;
-}
+    arena           *arena;
+    void            *handle;
+    void            (* routine)(void *);
+    void            *data;
+    u32             tid;
+#ifdef SPALL_ENABLED
+    SpallBuffer     spall_buffer;
+#endif
 
-#pragma function(memcpy)
-void *memcpy(void *dest, const void *src, size_t count)
-{
-    char *dest8 = (char *)dest;
-    const char *src8 = (const char *)src;
-    while (count--)
-    {
-        *dest8++ = *src8++;
-    }
-    return dest;
-}
+} rained_thread_context;
+
+internal rained_thread_context *rained_get_thread_context();
 
 internal arena *arena_alloc(u64 reserve, u64 commit)
 {
@@ -551,21 +543,25 @@ internal string string_copy(string str, arena *arena)
 #define sll_pop(sll) if(sll) { sll = sll->next; }
 
 #ifdef SPALL_ENABLED
-#include "spall.h"
-static SpallProfile spall_profile;
-static SpallBuffer spall_buffer;
-static void *spall_file;
-internal void spall_begin(char *name)
+
+SpallProfile    spall_profile;
+void            *spall_file;
+
+internal void spall_begin(char *name, SpallBuffer *buffer)
 {
     // cant you get the size of the string at compile time?
-    spall_buffer_begin(&spall_profile, &spall_buffer, name, cstring_length(name), os_time_us());
+    spall_buffer_begin(&spall_profile, buffer, name, cstring_length(name), os_time_us());
 }
-internal void spall_end()
+internal void spall_end(SpallBuffer *buffer)
 {
-    spall_buffer_end(&spall_profile, &spall_buffer, os_time_us());
+    spall_buffer_end(&spall_profile, buffer, os_time_us());
 }
 SPALL_NOINSTRUMENT bool spall_callback_write(SpallProfile *sp, const void *data, size_t length)
 {
+    if(!length)
+    {
+        return 1;
+    }
     return os_write_spall_file(spall_file, data, length);
 }
 SPALL_NOINSTRUMENT bool spall_callback_flush(SpallProfile *sp)
@@ -583,27 +579,30 @@ internal void spall_begin_profiling()
     assert(spall_file);
 
     spall_init_callbacks(1000, &spall_callback_write, &spall_callback_flush, &spall_callback_close, 0, &spall_profile);
-
+}
+internal SpallBuffer spall_buffer_alloc_and_init(u32 tid)
+{
     u64 buffer_size = mb(1);
     void *mem;
     os_mem_reserve(buffer_size, &mem);
     os_mem_commit(mem, buffer_size);
     memset(mem, 'd', buffer_size);
-    spall_buffer = (SpallBuffer)
+    SpallBuffer spall_buffer = (SpallBuffer)
     {
         .length = buffer_size,
-        .data = mem
+        .data = mem,
+        .tid = tid,
     };
     assert(spall_buffer_init(&spall_profile, &spall_buffer));
+    return spall_buffer;
 }
-internal void spall_end_profiling()
+internal void spall_buffer_exit_and_free(SpallBuffer *spall_buffer)
 {
-    spall_buffer_quit(&spall_profile, &spall_buffer);
-    os_mem_free(spall_buffer.data);
-    spall_quit(&spall_profile);
+    spall_buffer_quit(&spall_profile, spall_buffer);
+    os_mem_free(spall_buffer->data);
 }
-#define PROFILE_BEGIN(name) spall_begin(name)
-#define PROFILE_END() spall_end();
+#define PROFILE_BEGIN(name) spall_begin(name, &rained_get_thread_context()->spall_buffer)
+#define PROFILE_END() spall_end(&rained_get_thread_context()->spall_buffer)
 #else
 #define PROFILE_BEGIN(name)
 #define PROFILE_END()

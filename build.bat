@@ -30,8 +30,11 @@ IF "%1" == "release" (
     set compiler_flags=%common_compiler_flags% %debug_compiler_flags%
     set linker_flags=%common_linker_flags% %debug_linker_flags%
 )
+
+C:\raddbg\raddbg --ipc kill_all
+
 clang-cl rained_win32.c -o rained.exe %compiler_flags% -link %linker_flags%
 
 IF %ERRORLEVEL% == 0 (
-    call C:\raddbg\raddbg --ipc run
+    C:\raddbg\raddbg --ipc run
 )

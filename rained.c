@@ -2,6 +2,9 @@
 
 typedef struct rained_clang_state rained_clang_state;
 
+
+
+
 typedef struct
 {
     arena               *frame_arena;
@@ -20,37 +23,6 @@ typedef struct
 rained_state global_state;
 
 #include "rained_clang.c"
-
-internal loaded_bitmap load_bitmap(char *path, arena_t *arena)
-{
-    void *file = os_read_file(path, 0, arena);
-    
-    loaded_bitmap bitmap = { 0 };
-    bitmap.header = (bitmap_header*)file;
-    bitmap.data = ((u8*)file) + bitmap.header->BitmapOffset;
-
-    // we want a raw uncompressed bitmap (bitfield encoding)
-    assert(bitmap.header->Compression == 3);
-
-    // bgra -> rgba
-    u32 num_pixels = bitmap.header->Width * bitmap.header->Height;
-    for(u32 i = 0; i < num_pixels; i++)
-    {
-        u8* ptr = ((u8*)bitmap.data) + i * 4;
-
-        u8 b = *(ptr + 0);
-        u8 g = *(ptr + 1);
-        u8 r = *(ptr + 2);
-        u8 a = *(ptr + 3);
-        
-        *(ptr + 0) = r;
-        *(ptr + 1) = g;
-        *(ptr + 2) = b;
-        *(ptr + 3) = a;
-    }
-
-    return bitmap;
-}
 
 internal u32 caret_get_column(rained_view *view, caret *caret)
 {
@@ -783,7 +755,7 @@ internal void caret_move_up_chopped(rained_view *view, caret *caret)
 }
 
 #define d_color_text                0x00ebdbb2
-#define d_color_bg                  0x00141718
+#define d_color_bg                  0x00000000
 #define d_color_caret_line          0x001F1F1F
 #define d_color_selection           0x00545e52
 #define d_color_token_function      0x008ec07c
@@ -1031,7 +1003,6 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
     if(!view->is_a_command_view && view->buffer->path.p)
     {
         u32 view_length = chopped.lines[chopped.count - 1].pos_in_text + chopped.lines[chopped.count - 1].length - p;
-        //highlight_token_array arr = rained_clang_tokens_from_range(global_state.clang_state, view->buffer, p, view_length, global_state.frame_arena);
         highlight_token_array arr = rained_clang_query_tokens_for_file(global_state.clang_state, view->buffer);
     
         u32 fuckoff;
@@ -1222,7 +1193,7 @@ internal renderer_command *draw(rained_input *input)
         {
             .state = global_state.clang_state,
         };
-        os_create_thread(&rained_clang_thread_entry_point, ctx, L"rained_clang_thread", clang_arena);
+        os_create_thread(&rained_clang_thread_entry_point, ctx, L"rained_clang_thread");
         rained_clang_schedule_reparse(global_state.clang_state, global_state.buffers);
     }
     arena_reset(global_state.frame_arena);

@@ -16,58 +16,6 @@ void rained_clang_test_visit_inclusion(CXFile included_file, CXSourceLocation *i
     char *str = clang_getCString(clang_getFileName(included_file));
 }
 
-typedef struct
-{
-    arena       *arena;
-    ast_node    *nodes;
-    u32         num_nodes;
-
-} gather_nodes_context;
-
-internal enum CXChildVisitResult gather_node(CXCursor current_cursor, CXCursor parent, CXClientData client_data)
-{
-    gather_nodes_context *ctx = (gather_nodes_context *)client_data;
-    
-    CXSourceRange range = clang_Cursor_getSpellingNameRange(current_cursor,0,0);
-    //CXSourceRange range = clang_getCursorExtent(current_cursor);
-    CXSourceLocation range_start = clang_getRangeStart(range);
-    u32 line, column, offset;
-    CXFile file;
-    clang_getFileLocation(range_start, &file, &line, &column, &offset);
-    
-    CXSourceLocation range_end = clang_getRangeEnd(range);
-    u32 end_offset = 0;
-
-    CXFile end_file;
-    clang_getFileLocation(range_end, &end_file, 0, 0, &end_offset);
-
-    u32 length = end_offset - offset;
-    enum CXCursorKind kind = clang_getCursorKind(current_cursor);
-    CXString display_name = clang_getCursorDisplayName(current_cursor);
-    char *display_name_str = clang_getCString(display_name);
-    CXString spelling = clang_getCursorSpelling(current_cursor);
-    char *spelling_str = clang_getCString(spelling);
-
-    if(file == end_file)
-    {
-        ast_node *n = arena_push_struct_noalign(ctx->arena, ast_node);
-        *n = (ast_node)
-        {
-            .file = file,
-            .display_name = display_name_str,
-            .spelling = spelling_str,
-            .kind = kind,
-            .offset = offset, 
-            .line = line, 
-            .column = column, 
-            .length = length
-        };        
-        ctx->num_nodes++;
-    }
-
-    return CXChildVisit_Recurse;
-}
-
 internal void rained_clang_schedule_reparse(rained_clang_state *state, rained_buffer *buffers)
 {
     rained_clang_lock(state);
@@ -78,28 +26,19 @@ internal void rained_clang_schedule_reparse(rained_clang_state *state, rained_bu
 
 internal void rained_clang_parse_the_whole_thing(rained_clang_state *state, rained_buffer *buffers)
 {
-    if(state->translation_unit)
-    {
-        clang_disposeTranslationUnit(state->translation_unit);
-        arena_reset(state->nodes_arena);
-        state->nodes = 0;
-        state->num_nodes = 0;
-        arena_reset(state->token_cache_arena);
-        state->token_cache = 0;
-        state->translation_unit = 0;
-    }
+    PROFILE_BEGIN("clang parse");
 
     const char *argv[] = 
     {
-        "-I", "C:\\llvm\\include\\",
-        "-I", "C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Community\\VC\\Tools\\MSVC\\14.29.30133\\ATLMFC\\include",
-        "-I", "C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Community\\VC\\Tools\\MSVC\\14.29.30133\\include",
-        "-I", "C:\\Program Files (x86)\\Windows Kits\\NETFXSDK\\4.8\\include\\um",
-        "-I", "C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22621.0\\ucrt",
-        "-I", "C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22621.0\\shared",
-        "-I", "C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22621.0\\um",
-        "-I", "C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22621.0\\winrt",
-        "-I", "C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22621.0\\cppwinr",
+        "-isystem", "C:\\llvm\\include\\",
+        "-isystem", "C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Community\\VC\\Tools\\MSVC\\14.29.30133\\ATLMFC\\include",
+        "-isystem", "C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Community\\VC\\Tools\\MSVC\\14.29.30133\\include",
+        "-isystem", "C:\\Program Files (x86)\\Windows Kits\\NETFXSDK\\4.8\\include\\um",
+        "-isystem", "C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22621.0\\ucrt",
+        "-isystem", "C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22621.0\\shared",
+        "-isystem", "C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22621.0\\um",
+        "-isystem", "C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22621.0\\winrt",
+        "-isystem", "C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22621.0\\cppwinr"
     };
     i32 argc = lengthof(argv);
 
@@ -107,6 +46,7 @@ internal void rained_clang_parse_the_whole_thing(rained_clang_state *state, rain
     
     u32 num_unsaved_files = 0;
     struct CXUnsavedFile *unsaved_files = arena_head(scratch);
+#if 1
     rained_buffer *buffer = buffers;
     while(buffer)
     {
@@ -119,19 +59,67 @@ internal void rained_clang_parse_the_whole_thing(rained_clang_state *state, rain
                 .Contents = buffer->text,
                 .Length = buffer->text_size,
             };
-            num_unsaved_files++;   
+            num_unsaved_files++;
         }
         buffer = buffer->next;
     }
+#endif
 
-    u32 options = CXTranslationUnit_DetailedPreprocessingRecord | CXTranslationUnit_KeepGoing;
-    enum CXErrorCode err = clang_parseTranslationUnit2(state->index, "rained_win32.c", argv, argc, unsaved_files, num_unsaved_files, options, &state->translation_unit);
-    assert(err == CXError_Success);
+    u32 options = 0;
+    options |= CXTranslationUnit_DetailedPreprocessingRecord;
+    options |= CXTranslationUnit_KeepGoing;
 
-    u32 n = clang_getNumDiagnostics(state->translation_unit);
+    /* NOTE
+
+    reparsing w/o windows headers: ~50ms
+    reparsing with windows headers: ~2.5 seconds
+    reparsing with windows headers and CXTranslationUnit_PrecompiledPreamble: ~120ms
+    
+    preamble thing helps a lot, obviously... as long as the preamble isn't changing. and the way includes are structured right now, i.e first include the rained.c and then all of the windows stuff, whenever rained.c gets changed, it does a full parse from scratch, and we're down to 2.5 seconds again...
+
+    one option is to cope with being mindfull about the order of includes and whether or not you're editing something upstream of windows headers, and it will be fast. another option is to look into precompiling headers manually...
+
+    also, there's a bug when e.g
+
+    #include "windows.h"
+    #include "test.c"
+
+    triggers a windows header reparse even though it's upstream. but...
+
+    #include "windows.h"
+    anything e.g ;
+    #include "test.c"
+
+    it does the reparse correctly. fucking clang. fuck you. fucking piece of shit
+    */
+   
+    options |= CXTranslationUnit_PrecompiledPreamble;
+
+    if(state->translation_unit)
+    {
+        arena_reset(state->token_cache_arena);
+        state->token_cache = 0;
+
+        PROFILE_BEGIN("clang_reparseTranslationUnit");
+        u32 err = clang_reparseTranslationUnit(state->translation_unit, num_unsaved_files, unsaved_files, clang_defaultReparseOptions(state->translation_unit));
+        assert(err == 0);
+        PROFILE_END();
+    }
+    else
+    {
+        PROFILE_BEGIN("clang_parseTranslationUnit2");
+        enum CXErrorCode err = clang_parseTranslationUnit2(state->index, "rained_win32.c", argv, argc, unsaved_files, num_unsaved_files, options, &state->translation_unit);
+        assert(err == CXError_Success);
+        PROFILE_END();
+    }
+
+    PROFILE_BEGIN("diagnostics");
+    CXDiagnosticSet ds = clang_getDiagnosticSetFromTU(state->translation_unit);
+    u32 n = clang_getNumDiagnosticsInSet(ds);
     for(u32 i = 0; i < n; i++)
     {
-        CXDiagnostic diagnostic = clang_getDiagnostic(state->translation_unit, 0);
+        CXDiagnostic diagnostic = clang_getDiagnosticInSet(ds, i);
+        //CXDiagnostic diagnostic = clang_getDiagnostic(state->translation_unit, 0);
         char *spelling = clang_getCString(clang_getDiagnosticSpelling(diagnostic));
         enum CXDiagnosticSeverity severity = clang_getDiagnosticSeverity(diagnostic);
         char *severity_str;
@@ -152,23 +140,18 @@ internal void rained_clang_parse_the_whole_thing(rained_clang_state *state, rain
         stbsp_sprintf(buf, "%s \"%s\" %s(%u,%u)\n", severity_str, spelling, file_name, line, column);
         os_debug_output_string(buf);
     }
+    PROFILE_END();
 
+    PROFILE_BEGIN("inclusions");
     clang_getInclusions(state->translation_unit, &rained_clang_test_visit_inclusion, 0);
+    PROFILE_END();
 
-    PROFILE_BEGIN("clang gather nodes");
-    CXCursor cursor = clang_getTranslationUnitCursor(state->translation_unit);
-    gather_nodes_context *ctx = arena_push_struct(state->nodes_arena, gather_nodes_context);
-    state->nodes = arena_head(state->nodes_arena);
-    *ctx = (gather_nodes_context)
-    {
-        .arena = state->nodes_arena,
-        .nodes = state->nodes,
-    };
-    clang_visitChildren(cursor, &gather_node, ctx);
-    state->num_nodes = ctx->num_nodes;
+    CXString str = clang_getTranslationUnitSpelling(state->translation_unit);
+    os_debug_output_string(clang_getCString(str));
 
     arena_release(scratch);
 
+    PROFILE_END();
     PROFILE_END();
 }
 
@@ -200,53 +183,7 @@ internal b32 rained_clang_find_definition(rained_clang_state *state, rained_buff
 
 internal highlight_token_array rained_clang_tokens_from_range(rained_clang_state *state, rained_buffer *buffer, u32 position, u32 length, arena *arena)
 {
-    PROFILE_BEGIN("nodes_from_range");
     CXFile file = clang_getFile(state->translation_unit, buffer->path.p);
-
-    highlight_token *tokens = arena_head(arena);
-    u32 num_tokens = 0;
-
-    for(u32 i = 0; i < state->num_nodes; i++)
-    {
-        ast_node node = state->nodes[i];
-        if(clang_File_isEqual(node.file, file))
-        {
-            highlight_token t;
-            switch(node.kind)
-            {
-                case CXCursor_CallExpr:
-                case CXCursor_FunctionDecl:
-                {
-                    t.kind = highlight_token_function;
-                    break;
-                }
-                case CXCursor_MacroDefinition:
-                case CXCursor_MacroExpansion:
-                case CXCursor_EnumConstantDecl:
-                {
-                    t.kind = highlight_token_macro;
-                    break;
-                }
-                case CXCursor_TypeRef:
-                case CXCursor_StructDecl:
-                case CXCursor_TypedefDecl:
-                case CXCursor_EnumDecl:
-                {
-                    t.kind = highlight_token_type;
-                    break;
-                }
-                default: 
-                {
-                    continue;
-                }
-            }
-            t.offset = node.offset;
-            t.length = node.length;
-            *((highlight_token*)arena_push_struct_noalign(arena, highlight_token)) = t;
-            num_tokens++;
-        }
-    }
-    PROFILE_END();
 
     PROFILE_BEGIN("clang_tokenize");
     CXSourceLocation begin = clang_getLocationForOffset(state->translation_unit, file, position);
@@ -256,6 +193,15 @@ internal highlight_token_array rained_clang_tokens_from_range(rained_clang_state
     CXToken *cxtokens = 0;
     u32 num_cxtokens = 0;
     clang_tokenize(state->translation_unit, range, &cxtokens, &num_cxtokens);
+    
+    PROFILE_BEGIN("annotate tokens");
+    arena_t *scratch = arena_alloc(gb(1), mb(1)); // todo
+    CXCursor *cxcursors = arena_push(scratch, sizeof(CXCursor) * num_cxtokens, 64);
+    clang_annotateTokens(state->translation_unit, cxtokens, num_cxtokens, cxcursors);
+    PROFILE_END();
+
+    highlight_token *tokens = arena_head(arena);
+    u32 num_tokens = 0;
 
     for(u32 i = 0; i < num_cxtokens; i++)
     {
@@ -274,9 +220,43 @@ internal highlight_token_array rained_clang_tokens_from_range(rained_clang_state
                 t.kind = highlight_token_comment;
                 break;
             }
-            default:
+            case CXToken_Punctuation:
+            case CXToken_Literal:
             {
                 continue;
+            }
+            case CXToken_Identifier:
+            {
+                CXCursor cursor = cxcursors[i];
+                enum CXCursorKind cursor_kind = clang_getCursorKind(cursor);
+                switch(cursor_kind)
+                {
+                    case CXCursor_CallExpr:
+                    case CXCursor_FunctionDecl:
+                    {
+                        t.kind = highlight_token_function;
+                        break;
+                    }
+                    case CXCursor_MacroDefinition:
+                    case CXCursor_MacroExpansion:
+                    case CXCursor_EnumConstantDecl:
+                    {
+                        t.kind = highlight_token_macro;
+                        break;
+                    }
+                    case CXCursor_TypeRef:
+                    case CXCursor_StructDecl:
+                    case CXCursor_TypedefDecl:
+                    case CXCursor_EnumDecl:
+                    {
+                        t.kind = highlight_token_type;
+                        break;
+                    }
+                    default: 
+                    {
+                        continue;
+                    }
+                }
             }
         }
         CXSourceRange token_range = clang_getTokenExtent(state->translation_unit, cxtoken);
@@ -291,9 +271,10 @@ internal highlight_token_array rained_clang_tokens_from_range(rained_clang_state
         *((highlight_token*)arena_push_struct_noalign(arena, highlight_token)) = t;
         num_tokens++;
     }
+
     clang_disposeTokens(state->translation_unit, cxtokens, num_cxtokens);
     PROFILE_END();
-
+    arena_release(scratch);
     return (highlight_token_array)
     {
         .tokens = tokens,
@@ -335,7 +316,6 @@ internal void rained_clang_thread_entry_point(void *data)
 {
     rained_clang_thread_context *ctx = (rained_clang_thread_context *)data;
     ctx->state->index = clang_createIndex(0, 0);
-    ctx->state->nodes_arena = arena_alloc(gb(1), mb(1));
     ctx->state->token_cache_arena = arena_alloc(gb(1), mb(1));
 
     while(1)
@@ -362,5 +342,9 @@ internal void rained_clang_thread_entry_point(void *data)
         }
         rained_clang_unlock(ctx->state);
 
+#ifdef SPALL_ENABLED
+        // note: on exit we're just pulling the rug on our threads, and i'm not sure what to do about this right now. thus we have to flush explicitly.
+        spall_buffer_flush(&spall_profile, &rained_get_thread_context()->spall_buffer);
+#endif
     }
 }

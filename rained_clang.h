@@ -26,12 +26,22 @@ typedef struct
 
 } highlight_token_array;
 
-typedef struct file_and_highlight_token_array file_and_highlight_token_array;
-struct file_and_highlight_token_array
+typedef struct
 {
-    rained_buffer                   *buffer;
+    arena                           *arena;
     highlight_token_array           arr;
-    file_and_highlight_token_array  *next;
+    u32                             tu_version;
+
+} file_token_cache_entry_tokens;
+
+typedef struct file_token_cache_entry file_token_cache_entry;
+struct file_token_cache_entry
+{
+    file_token_cache_entry_tokens   front;
+    file_token_cache_entry_tokens   back;
+    rained_buffer                   *buffer;
+    file_token_cache_entry          *next;
+    b32                             update;
 };
 
 typedef struct
@@ -46,16 +56,14 @@ typedef struct
 
 struct rained_clang_state
 {
-    u64                                 lock;
+    volatile u32                        lock;
 
     b32                                 reparse;
     rained_buffer                       *reparse_buffers;
 
-    b32                                 cache_tokens;
-    rained_buffer                       *cache_tokens_buffer;
-
     CXIndex                             index;
     CXTranslationUnit                   translation_unit;
-    arena                               *token_cache_arena;
-    file_and_highlight_token_array      *token_cache;
+    arena                               *token_cache_entries_arena;
+    file_token_cache_entry              *token_cache;
+    u32                                 tu_version;
 };

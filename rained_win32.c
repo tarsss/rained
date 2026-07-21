@@ -402,7 +402,9 @@ internal DWORD WINAPI win32_thread_entry_point(LPVOID lpParameter)
     rained_thread_context *ctx = (rained_thread_context *)lpParameter;
     rained_init_thread_context(ctx);
     ctx->routine(ctx->data);
+#ifdef SPALL_ENABLED
     spall_buffer_exit_and_free(&ctx->spall_buffer);
+#endif
     arena_release(ctx->arena);
     return 0;
 }
@@ -888,7 +890,7 @@ void __stdcall WinMainCRTStartup()
         };
         
         renderer_command *cmd = draw(&in);
-        PROFILE_BEGIN("draw");
+        PROFILE_BEGIN("render");
 
         // todo removeme
         f32 clear_color[4] = { 1,0,1,1 }; 

@@ -1,14 +1,16 @@
 #include "rained.h"
 #include "rained_clang.h"
 
-internal void rained_clang_lock(rained_clang_state *state)
+volatile u32 clang_state_lock;
+
+internal void rained_clang_lock()
 {
-    while(__sync_val_compare_and_swap(&state->lock, 1, 0));
+    while(__sync_val_compare_and_swap(&clang_state_lock, 0, 1));
 }
 
-internal void rained_clang_unlock(rained_clang_state *state)
+internal void rained_clang_unlock()
 {
-    state->lock = 0;
+    clang_state_lock = 0;
 }
 
 void rained_clang_test_visit_inclusion(CXFile included_file, CXSourceLocation *inclusion_stack, unsigned include_len, CXClientData client_data)
@@ -18,10 +20,10 @@ void rained_clang_test_visit_inclusion(CXFile included_file, CXSourceLocation *i
 
 internal void rained_clang_schedule_reparse(rained_clang_state *state, rained_buffer *buffers)
 {
-    rained_clang_lock(state);
+    rained_clang_lock();
     state->reparse = 1;
     state->reparse_buffers = buffers;
-    rained_clang_unlock(state);
+    rained_clang_unlock();
 }
 
 internal void rained_clang_parse_the_whole_thing(rained_clang_state *state, rained_buffer *buffers)
@@ -68,6 +70,8 @@ internal void rained_clang_parse_the_whole_thing(rained_clang_state *state, rain
     u32 options = 0;
     options |= CXTranslationUnit_DetailedPreprocessingRecord;
     options |= CXTranslationUnit_KeepGoing;
+    options |= CXTranslationUnit_CreatePreambleOnFirstParse;
+    options |= CXTranslationUnit_RetainExcludedConditionalBlocks;
 
     /* NOTE
 
@@ -97,9 +101,6 @@ internal void rained_clang_parse_the_whole_thing(rained_clang_state *state, rain
 
     if(state->translation_unit)
     {
-        arena_reset(state->token_cache_arena);
-        state->token_cache = 0;
-
         PROFILE_BEGIN("clang_reparseTranslationUnit");
         u32 err = clang_reparseTranslationUnit(state->translation_unit, num_unsaved_files, unsaved_files, clang_defaultReparseOptions(state->translation_unit));
         assert(err == 0);
@@ -113,6 +114,7 @@ internal void rained_clang_parse_the_whole_thing(rained_clang_state *state, rain
         PROFILE_END();
     }
 
+#ifdef RAINED_CLANG_DEBUG
     PROFILE_BEGIN("diagnostics");
     CXDiagnosticSet ds = clang_getDiagnosticSetFromTU(state->translation_unit);
     u32 n = clang_getNumDiagnosticsInSet(ds);
@@ -148,6 +150,7 @@ internal void rained_clang_parse_the_whole_thing(rained_clang_state *state, rain
 
     CXString str = clang_getTranslationUnitSpelling(state->translation_unit);
     os_debug_output_string(clang_getCString(str));
+#endif
 
     arena_release(scratch);
 
@@ -157,7 +160,7 @@ internal void rained_clang_parse_the_whole_thing(rained_clang_state *state, rain
 
 internal b32 rained_clang_find_definition(rained_clang_state *state, rained_buffer *buffer, caret caret, u32 *position, string *file_path, arena *arena)
 {
-    rained_clang_lock(state);
+    rained_clang_lock();
     CXFile file = clang_getFile(state->translation_unit, buffer->path.p);
     if(file)
     {
@@ -173,17 +176,22 @@ internal b32 rained_clang_find_definition(rained_clang_state *state, rained_buff
             CXString cxstr = clang_getFileName(def_file);
             *file_path = arena_push_cstring(arena, (char*)clang_getCString(cxstr));
             clang_disposeString(cxstr);
-            rained_clang_unlock(state);
+            rained_clang_unlock();
             return 1;
         }
     }
-    rained_clang_unlock(state);
+    rained_clang_unlock();
     return 0;
 }
 
 internal highlight_token_array rained_clang_tokens_from_range(rained_clang_state *state, rained_buffer *buffer, u32 position, u32 length, arena *arena)
 {
     CXFile file = clang_getFile(state->translation_unit, buffer->path.p);
+
+    // note: quick fix for the fact that we're wrongly passing the buffer pointer...
+    u64 buffer_size = 0;
+    clang_getFileContents(state->translation_unit, file, &buffer_size);
+    length = min(buffer_size, length);
 
     PROFILE_BEGIN("clang_tokenize");
     CXSourceLocation begin = clang_getLocationForOffset(state->translation_unit, file, position);
@@ -284,6 +292,11 @@ internal highlight_token_array rained_clang_tokens_from_range(rained_clang_state
         }
     }
 
+    if(num_tokens == 0)
+    {
+        assert(0);
+    }
+
     clang_disposeTokens(state->translation_unit, cxtokens, num_cxtokens);
     PROFILE_END();
     arena_release(scratch);
@@ -296,21 +309,50 @@ internal highlight_token_array rained_clang_tokens_from_range(rained_clang_state
 
 internal highlight_token_array rained_clang_query_tokens_for_file(rained_clang_state *state, rained_buffer *buffer)
 {
-    rained_clang_lock(state);
-
-    file_and_highlight_token_array *entry = state->token_cache;
+    rained_clang_lock();
+    file_token_cache_entry *entry = state->token_cache;
     while(entry)
     {
         if(entry->buffer == buffer)
         {
-            return entry->arr;
+            if(entry->back.tu_version > entry->front.tu_version)
+            {
+                file_token_cache_entry_tokens temp = entry->front;
+                entry->front = entry->back;
+                entry->back = temp;
+            }
+            if(entry->front.tu_version != state->tu_version)
+            {                
+                entry->update = 1;
+            }
+            rained_clang_unlock();
+            return entry->front.arr;
         }
         entry = entry->next;
     }
 
-    state->cache_tokens = 1;
-    state->cache_tokens_buffer = buffer;
-    rained_clang_unlock(state);
+    if(!state->token_cache_entries_arena)
+    {
+        state->token_cache_entries_arena = arena_alloc(gb(1), kb(4));
+    }
+
+    file_token_cache_entry *new_entry = arena_push_struct(state->token_cache_entries_arena, file_token_cache_entry);
+    *new_entry = (file_token_cache_entry)
+    {
+        .front = 
+        {
+            .arena = arena_alloc(gb(1), mb(1)),
+        },
+        .back = 
+        {
+            .arena = arena_alloc(gb(1), mb(1)),
+        },
+        .buffer = buffer,
+        .update = 1,
+    };
+    sll_push(state->token_cache, new_entry);
+
+    rained_clang_unlock();
     
     return (highlight_token_array)
     {
@@ -328,31 +370,36 @@ internal void rained_clang_thread_entry_point(void *data)
 {
     rained_clang_thread_context *ctx = (rained_clang_thread_context *)data;
     ctx->state->index = clang_createIndex(0, 0);
-    ctx->state->token_cache_arena = arena_alloc(gb(1), mb(1));
 
     while(1)
     {
-        rained_clang_lock(ctx->state);
+        rained_clang_lock();
         if(ctx->state->reparse)
         {
             ctx->state->reparse = 0;
-            rained_clang_unlock(ctx->state);
-            rained_clang_parse_the_whole_thing(ctx->state, ctx->state->reparse_buffers);
-        }
 
-        rained_clang_lock(ctx->state);
-        if(ctx->state->cache_tokens)
-        {
-            ctx->state->cache_tokens = 0;
-            file_and_highlight_token_array *new_entry = arena_push_struct(ctx->state->token_cache_arena, file_and_highlight_token_array);
-            *new_entry = (file_and_highlight_token_array)
-            {
-                .buffer = ctx->state->cache_tokens_buffer,
-                .arr = rained_clang_tokens_from_range(ctx->state, ctx->state->cache_tokens_buffer, 0, ctx->state->cache_tokens_buffer->text_size, ctx->state->token_cache_arena)
-            };
-            sll_push(ctx->state->token_cache, new_entry);
+            rained_clang_unlock();
+            rained_clang_parse_the_whole_thing(ctx->state, ctx->state->reparse_buffers);
+            rained_clang_lock();
+
+            ctx->state->tu_version++;
         }
-        rained_clang_unlock(ctx->state);
+        file_token_cache_entry *entry = ctx->state->token_cache;
+        while(entry)
+        {
+            if(entry->update)
+            {
+                rained_clang_unlock();
+                arena_reset(entry->back.arena);
+                highlight_token_array tokens = rained_clang_tokens_from_range(ctx->state, entry->buffer, 0, entry->buffer->text_size, entry->back.arena);
+                rained_clang_lock();
+                entry->back.arr = tokens;
+                entry->update = 0;
+                entry->back.tu_version = ctx->state->tu_version;
+            }
+            entry = entry->next;
+        }
+        rained_clang_unlock();
 
 #ifdef SPALL_ENABLED
         // note: on exit we're just pulling the rug on our threads, and i'm not sure what to do about this right now. thus we have to flush explicitly.

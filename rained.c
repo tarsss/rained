@@ -2,9 +2,6 @@
 
 typedef struct rained_clang_state rained_clang_state;
 
-
-
-
 typedef struct
 {
     arena               *frame_arena;
@@ -1002,10 +999,8 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
     
     if(!view->is_a_command_view && view->buffer->path.p)
     {
-        u32 view_length = chopped.lines[chopped.count - 1].pos_in_text + chopped.lines[chopped.count - 1].length - p;
         highlight_token_array arr = rained_clang_query_tokens_for_file(global_state.clang_state, view->buffer);
-    
-        u32 fuckoff;
+
         for(u32 i = 0; i < arr.num_tokens; i++)
         {
             highlight_token t = arr.tokens[i];
@@ -1180,7 +1175,7 @@ internal renderer_command *draw(rained_input *input)
         global_state.tile_right = arena_push_struct_zero(global_state.forever_arena, rained_tile);
         global_state.tile_left->next = global_state.tile_right;
         global_state.focused_tile = global_state.tile_left;
-        rained_buffer *b0 = open_buffer_from_file(&global_state, arena_push_cstring(global_state.frame_arena, ".\\test.txt"));
+        rained_buffer *b0 = open_buffer_from_file(&global_state, arena_push_cstring(global_state.frame_arena, ".\\rained.c"));
         rained_buffer *b1 = open_buffer_from_file(&global_state, arena_push_cstring(global_state.frame_arena, ".\\rained_win32.c"));
         rained_view *v0 = tile_push_view(global_state.tile_left, b0);
         rained_view *v1 = tile_push_view(global_state.tile_right, b1);
@@ -1198,11 +1193,13 @@ internal renderer_command *draw(rained_input *input)
     }
     arena_reset(global_state.frame_arena);
 
+    PROFILE_BEGIN("make font");
     if(global_state.font.size != global_state.font_size)
     {
         os_release_font_atlas(global_state.font);
         global_state.font = os_make_font_atlas(global_state.font_size, global_state.frame_arena);
     }
+    PROFILE_END();
     
     rained_view *view = global_state.focused_tile->view;
 
@@ -1377,6 +1374,13 @@ internal renderer_command *draw(rained_input *input)
                     if(global_state.font_size > 1)
                     {
                         global_state.font_size--;
+                    }
+                }
+                else if(e.code == ('W' | MODIFIER_CTRL))
+                {
+                    if(global_state.focused_tile->view->next)
+                    {
+                        tile_pop_view(global_state.focused_tile);
                     }
                 }
             }

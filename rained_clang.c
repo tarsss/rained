@@ -211,21 +211,32 @@ internal highlight_token_array rained_clang_tokens_from_range(rained_clang_state
         switch(kind)
         {
             case CXToken_Keyword:
-            {
-                t.kind = highlight_token_keyword;
-                break;
-            }
             case CXToken_Comment:
             {
-                t.kind = highlight_token_comment;
+                if(kind == CXToken_Keyword)
+                {
+                    t.kind = highlight_token_keyword;
+                }
+                if(kind == CXToken_Comment)
+                {
+                    t.kind = highlight_token_comment;
+                }
+
+                CXSourceRange token_range = clang_getTokenExtent(state->translation_unit, cxtoken);
+                CXSourceLocation token_start = clang_getRangeStart(token_range);
+                CXSourceLocation token_end = clang_getRangeEnd(token_range);
+                u32 token_start_offset, token_end_offset;
+                clang_getFileLocation(token_start, 0, 0, 0, &token_start_offset);
+                clang_getFileLocation(token_end, 0, 0, 0, &token_end_offset);
+        
+                t.offset = token_start_offset;
+                t.length = token_end_offset - token_start_offset;
+                *((highlight_token*)arena_push_struct_noalign(arena, highlight_token)) = t;
+                num_tokens++;
+                
                 break;
             }
-            case CXToken_Punctuation:
-            case CXToken_Literal:
-            {
-                continue;
-            }
-            case CXToken_Identifier:
+            default:
             {
                 CXCursor cursor = cxcursors[i];
                 enum CXCursorKind cursor_kind = clang_getCursorKind(cursor);
@@ -257,19 +268,20 @@ internal highlight_token_array rained_clang_tokens_from_range(rained_clang_state
                         continue;
                     }
                 }
+
+                CXSourceRange range = clang_Cursor_getSpellingNameRange(cursor,0,0);
+                CXSourceLocation range_start = clang_getRangeStart(range);
+                CXSourceLocation range_end = clang_getRangeEnd(range);
+                u32 offset;
+                u32 end_offset = 0;
+                clang_getFileLocation(range_start, 0, 0, 0, &offset);
+                clang_getFileLocation(range_end, 0, 0, 0, &end_offset);
+                t.offset = offset;
+                t.length = end_offset - offset;
+                *((highlight_token*)arena_push_struct_noalign(arena, highlight_token)) = t;
+                num_tokens++;
             }
         }
-        CXSourceRange token_range = clang_getTokenExtent(state->translation_unit, cxtoken);
-        CXSourceLocation token_start = clang_getRangeStart(token_range);
-        CXSourceLocation token_end = clang_getRangeEnd(token_range);
-        u32 token_start_offset, token_end_offset;
-        clang_getFileLocation(token_start, 0, 0, 0, &token_start_offset);
-        clang_getFileLocation(token_end, 0, 0, 0, &token_end_offset);
-
-        t.offset = token_start_offset;
-        t.length = token_end_offset - token_start_offset;
-        *((highlight_token*)arena_push_struct_noalign(arena, highlight_token)) = t;
-        num_tokens++;
     }
 
     clang_disposeTokens(state->translation_unit, cxtokens, num_cxtokens);

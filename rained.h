@@ -310,15 +310,15 @@ struct renderer_command
     };
 };
 
-typedef struct undo_buffer_entry undo_buffer_entry;
-struct undo_buffer_entry
+typedef struct text_edit text_edit;
+struct text_edit
 {
-    text_edit_kind      kind;
+    text_edit           *prev;
+    text_edit           *next;
     caret               *carets;
-    u32                 num_carets; 
     string              *strings;
-    undo_buffer_entry   *next;
-    undo_buffer_entry   *prev;
+    u32                 num_carets; 
+    text_edit_kind      kind;
 };
 
 typedef struct rained_buffer rained_buffer;
@@ -335,9 +335,11 @@ struct rained_buffer
         };
         string          text_string;
     };
-    arena               *undo_buffer_arena;
-    undo_buffer_entry   *undo_buffer_tail;
-    undo_buffer_entry   *undo_buffer_position;
+    arena               *edit_buffer_arena;
+    text_edit           *edit_buffer_tail;
+    text_edit           *edit_buffer_position;
+    text_edit           *edits_since_token_cache_update_scheduled;
+    
     b32                 is_dirty;
     rained_buffer       *next;
 };

@@ -292,11 +292,6 @@ internal highlight_token_array rained_clang_tokens_from_range(rained_clang_state
         }
     }
 
-    if(num_tokens == 0)
-    {
-        assert(0);
-    }
-
     clang_disposeTokens(state->translation_unit, cxtokens, num_cxtokens);
     PROFILE_END();
     arena_release(scratch);
@@ -322,8 +317,8 @@ internal highlight_token_array rained_clang_query_tokens_for_file(rained_clang_s
                 entry->back = temp;
             }
             if(entry->front.tu_version != state->tu_version)
-            {                
-                entry->update = 1;
+            {       
+                //entry->update = 1;
             }
             rained_clang_unlock();
             return entry->front.arr;

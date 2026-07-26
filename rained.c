@@ -188,22 +188,26 @@ internal void carets_bubble_sort_top_to_bottom(rained_view *view)
     }
 }
 
-internal void undo_buffer_push(rained_buffer *buffer, undo_buffer_entry *entry)
+internal void edit_buffer_push(rained_buffer *buffer, text_edit *entry)
 {
-    if(buffer->undo_buffer_position)
+    if(buffer->edit_buffer_position)
     {
-        buffer->undo_buffer_position->next = entry;
-        entry->prev = buffer->undo_buffer_position;
-        buffer->undo_buffer_position = entry;
+        buffer->edit_buffer_position->next = entry;
+        entry->prev = buffer->edit_buffer_position;
+        buffer->edit_buffer_position = entry;
     }
     else
     {
-        buffer->undo_buffer_position = entry;
-        buffer->undo_buffer_tail = entry;
+        buffer->edit_buffer_position = entry;
+        buffer->edit_buffer_tail = entry;
+    }
+    if(!buffer->edits_since_token_cache_update_scheduled)
+    {
+        buffer->edits_since_token_cache_update_scheduled = entry;
     }
 }
 
-internal void carets_insert_characters(rained_view *view, text_edit_insert insert, b32 write_undo)
+internal void carets_insert_characters(rained_view *view, text_edit_insert insert, b32 push_edit)
 {
     carets_bubble_sort_top_to_bottom(view);
     u32 offset = 0;
@@ -231,37 +235,37 @@ internal void carets_insert_characters(rained_view *view, text_edit_insert inser
         }
         caret->wish_column = caret_get_column(view, caret);
     }
-    if(write_undo)
+    if(push_edit)
     {
-        undo_buffer_entry *e = arena_push_struct(view->buffer->undo_buffer_arena, undo_buffer_entry);
-        *e = (undo_buffer_entry)
+        text_edit *e = arena_push_struct(view->buffer->edit_buffer_arena, text_edit);
+        *e = (text_edit)
         {
             .kind = TEXT_EDIT_INSERT,
-            .carets = arena_copy(view->buffer->undo_buffer_arena, view->carets, sizeof(caret) * view->num_carets),
+            .carets = arena_copy(view->buffer->edit_buffer_arena, view->carets, sizeof(caret) * view->num_carets),
             .num_carets = view->num_carets
         };
-        e->strings = arena_push(view->buffer->undo_buffer_arena, view->num_carets * sizeof(string), 8);
+        e->strings = arena_push(view->buffer->edit_buffer_arena, view->num_carets * sizeof(string), 8);
         for(u32 i = 0; i < view->num_carets; i++)
         {
             e->strings[i].length = insert.strings[i].length;
-            e->strings[i].p = arena_copy(view->buffer->undo_buffer_arena, insert.strings[i].p, insert.strings[i].length);
+            e->strings[i].p = arena_copy(view->buffer->edit_buffer_arena, insert.strings[i].p, insert.strings[i].length);
         }
-        undo_buffer_push(view->buffer, e);
+        edit_buffer_push(view->buffer, e);
     }
     view->fit_caret = 1;
     view->buffer->is_dirty = 1;
 }
 
 // todo: don't push undo when each num_to_remove = 0
-internal void carets_remove_characters(rained_view *view, text_edit_delete delete, b32 write_undo)
+internal void carets_remove_characters(rained_view *view, text_edit_delete delete, b32 push_edit)
 {
-    undo_buffer_entry *e = arena_push_struct(view->buffer->undo_buffer_arena, undo_buffer_entry);
-    if(write_undo)
+    text_edit *e = arena_push_struct(view->buffer->edit_buffer_arena, text_edit);
+    if(push_edit)
     {
-        *e = (undo_buffer_entry)
+        *e = (text_edit)
         {
             .kind = TEXT_EDIT_DELETE,
-            .strings = arena_push_zero(view->buffer->undo_buffer_arena, sizeof(string) * view->num_carets, 8),
+            .strings = arena_push_zero(view->buffer->edit_buffer_arena, sizeof(string) * view->num_carets, 8),
             .num_carets = view->num_carets,
         };
     }
@@ -281,9 +285,9 @@ internal void carets_remove_characters(rained_view *view, text_edit_delete delet
                 num_to_remove++;
             }
         }
-        if(write_undo)
+        if(push_edit)
         {
-            e->strings[c].p = arena_copy(view->buffer->undo_buffer_arena, view->buffer->text + caret->position - num_to_remove, num_to_remove);
+            e->strings[c].p = arena_copy(view->buffer->edit_buffer_arena, view->buffer->text + caret->position - num_to_remove, num_to_remove);
             e->strings[c].length = num_to_remove;
         }
         offset += num_to_remove;
@@ -296,10 +300,10 @@ internal void carets_remove_characters(rained_view *view, text_edit_delete delet
         caret->position -= num_to_remove;
         caret->wish_column = caret_get_column(view, caret);
     }
-    if(write_undo)
+    if(push_edit)
     {
-        e->carets = arena_copy(view->buffer->undo_buffer_arena, view->carets, sizeof(caret) * view->num_carets),
-        undo_buffer_push(view->buffer, e);
+        e->carets = arena_copy(view->buffer->edit_buffer_arena, view->carets, sizeof(caret) * view->num_carets),
+        edit_buffer_push(view->buffer, e);
     }
     view->fit_caret = 1;
     view->buffer->is_dirty = 1;
@@ -337,7 +341,7 @@ internal void caret_spawn_new_above(rained_view *view)
 
 internal void undo(rained_view *view)
 {
-    undo_buffer_entry *entry = view->buffer->undo_buffer_position;
+    text_edit *entry = view->buffer->edit_buffer_position;
     if(entry)
     {
         switch(entry->kind)
@@ -370,17 +374,17 @@ internal void undo(rained_view *view)
                 break;
             }
         }
-        view->buffer->undo_buffer_position = entry->prev;
+        view->buffer->edit_buffer_position = entry->prev;
     }
 }
 
 internal void redo(rained_view *view)
 {
-    if(view->buffer->undo_buffer_position)
+    if(view->buffer->edit_buffer_position)
     {
-        if(view->buffer->undo_buffer_position->next)
+        if(view->buffer->edit_buffer_position->next)
         {
-            view->buffer->undo_buffer_position = view->buffer->undo_buffer_position->next;
+            view->buffer->edit_buffer_position = view->buffer->edit_buffer_position->next;
         }
         else
         {
@@ -389,9 +393,9 @@ internal void redo(rained_view *view)
     }
     else
     {
-        view->buffer->undo_buffer_position = view->buffer->undo_buffer_tail;
+        view->buffer->edit_buffer_position = view->buffer->edit_buffer_tail;
     }
-    undo_buffer_entry *entry = view->buffer->undo_buffer_position;
+    text_edit *entry = view->buffer->edit_buffer_position;
     if(entry)
     {
         switch(entry->kind)
@@ -447,7 +451,7 @@ internal rained_buffer *open_empty_buffer(rained_state *state)
     {
         .text = arena_head(text_arena),
         .text_arena = text_arena,
-        .undo_buffer_arena = arena_alloc(gb(1), mb(1)),
+        .edit_buffer_arena = arena_alloc(gb(1), mb(1)),
     };
     sll_push(state->buffers, buffer);
     return buffer;
@@ -465,7 +469,7 @@ internal rained_buffer *open_buffer_from_file(rained_state *state, string path)
         .text = text,
         .text_arena = text_arena,
         .text_size = file_size,
-        .undo_buffer_arena = arena_alloc(gb(1), mb(1)),
+        .edit_buffer_arena = arena_alloc(gb(1), mb(1)),
     };
     sll_push(state->buffers, buffer);
     return buffer;
@@ -847,7 +851,7 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
             // todo: there's a bug with very long lines, when caret chopped line index > screen height it just stops tracking 
             u32 line_start = find_line_start(view->buffer, fit_pos);
             u32 offset = position_to_line_in_chopped_line(view->buffer, view->width_cells, line_start, fit_pos, global_state.frame_arena);
-            u32 height = view->height_cells - min(view->height_cells, 3);
+            u32 height = view->height_cells - min(view->height_cells, 4);
             u32 pos = fit_pos;
             u32 line_ind = find_line_index(view->buffer, pos);
             while(line_ind)
@@ -996,7 +1000,7 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
             }
         }
     }
-    
+
     if(!view->is_a_command_view && view->buffer->path.p)
     {
         highlight_token_array arr = rained_clang_query_tokens_for_file(global_state.clang_state, view->buffer);
@@ -1005,7 +1009,51 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
         {
             highlight_token t = arr.tokens[i];
             u32 color = 0;
-    
+
+            // apply edits between the version of the buffer that was used for the latest token cache update and the current one...
+#if 1
+            text_edit *e = view->buffer->edits_since_token_cache_update_scheduled;
+            while(e)
+            {
+                if(e->kind == TEXT_EDIT_INSERT)
+                {
+                    for(u32 j = 0; j < e->num_carets; j++)
+                    {
+                        u32 edit_len = e->strings[j].length;
+                        u32 edit_pos = e->carets[j].position - e->strings[j].length;
+                        if(edit_pos < t.offset)
+                        {
+                            t.offset += edit_len;
+                        }
+                        else if(edit_pos >= t.offset && edit_pos <= t.offset + t.length)
+                        {
+                            t.length += edit_len;
+                        }
+                    }
+                }
+                if(e->kind == TEXT_EDIT_DELETE)
+                {
+                    for(u32 j = 0; j < e->num_carets; j++)
+                    {
+                        for(u32 j = 0; j < e->num_carets; j++)
+                        {
+                            u32 edit_len = e->strings[j].length;
+                            u32 edit_pos = e->carets[j].position + e->strings[j].length;
+                            if(edit_pos < t.offset)
+                            {
+                                t.offset -= edit_len;
+                            }
+                            else if(edit_pos >= t.offset && edit_pos - edit_len < t.offset + t.length)
+                            {
+                                t.length -= edit_len;
+                            }
+                        }
+                    }
+                }
+                e = e->next;
+            }
+#endif 
+
             switch(t.kind)
             {
                 case highlight_token_function: color = d_color_token_function; break;
@@ -1103,7 +1151,7 @@ internal void carets_delete_a_character_or_selection(rained_view *view)
     carets_remove_characters(view, delete, 1);
 }
 
-internal void carets_insert_or_replace_selection(rained_view *view, text_edit_insert insert, b32 write_undo)
+internal void carets_insert_or_replace_selection(rained_view *view, text_edit_insert insert, b32 push_edit)
 {
     text_edit_delete delete = 
     {
@@ -1132,9 +1180,9 @@ internal void carets_insert_or_replace_selection(rained_view *view, text_edit_in
     }
     if(do_delete)
     {
-        carets_remove_characters(view, delete, write_undo);
+        carets_remove_characters(view, delete, push_edit);
     }
-    carets_insert_characters(view, insert, write_undo);
+    carets_insert_characters(view, insert, push_edit);
 }
 
 

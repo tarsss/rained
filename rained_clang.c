@@ -18,15 +18,52 @@ void rained_clang_test_visit_inclusion(CXFile included_file, CXSourceLocation *i
     char *str = clang_getCString(clang_getFileName(included_file));
 }
 
-internal void rained_clang_schedule_reparse(rained_clang_state *state, rained_buffer *buffers)
+internal buffer_snapshot push_buffer_snapshot(rained_buffer *buffer, arena *arena)
 {
-    rained_clang_lock();
-    state->reparse = 1;
-    state->reparse_buffers = buffers;
-    rained_clang_unlock();
+    buffer_snapshot res = { 0 };
+    res.data = arena_push_string_terminate(arena, buffer->text_string);
+    if(buffer->path.p)
+    {
+        res.path = arena_push_string_terminate(arena, buffer->path);
+    }
+    return res;
 }
 
-internal void rained_clang_parse_the_whole_thing(rained_clang_state *state, rained_buffer *buffers)
+internal b32 rained_clang_schedule_reparse(rained_clang_state *state, rained_buffer *buffers)
+{
+    rained_clang_lock();
+    if(state->reparse)
+    {
+        rained_clang_unlock();
+        return 0;
+    }
+    state->reparse = 1;
+
+    state->num_reparse_buffers = 0;
+    rained_buffer *b = buffers;
+    while(b)
+    {
+        state->num_reparse_buffers++;
+        b->edits_since_token_cache_update_scheduled = 0;
+        b = b->next;
+    }
+
+    state->reparse_buffers = arena_push(state->arena, sizeof(buffer_snapshot) * state->num_reparse_buffers, 64);
+
+    b = buffers;
+    u32 i = 0;
+    while(b)
+    {
+        state->reparse_buffers[i] = push_buffer_snapshot(b, state->arena);
+        b = b->next;
+        i++;
+    }
+    
+    rained_clang_unlock();
+    return 1;
+}
+
+internal void rained_clang_parse_the_whole_thing(rained_clang_state *state, buffer_snapshot *buffers, u32 num_buffers)
 {
     PROFILE_BEGIN("clang parse");
 
@@ -49,21 +86,21 @@ internal void rained_clang_parse_the_whole_thing(rained_clang_state *state, rain
     u32 num_unsaved_files = 0;
     struct CXUnsavedFile *unsaved_files = arena_head(scratch);
 #if 1
-    rained_buffer *buffer = buffers;
-    while(buffer)
+
+    for(u32 i = 0; i < num_buffers; i++)
     {
-        if(buffer->path.p)
+        buffer_snapshot buffer = buffers[i];
+        if(buffer.path.p)
         {
             struct CXUnsavedFile *f = arena_push_struct_noalign(scratch, struct CXUnsavedFile);
             *f = (struct CXUnsavedFile)
             {
-                .Filename = buffer->path.p,
-                .Contents = buffer->text,
-                .Length = buffer->text_size,
+                .Filename = buffer.path.p,
+                .Contents = buffer.data.p,
+                .Length = buffer.data.length,
             };
             num_unsaved_files++;
         }
-        buffer = buffer->next;
     }
 #endif
 
@@ -184,18 +221,16 @@ internal b32 rained_clang_find_definition(rained_clang_state *state, rained_buff
     return 0;
 }
 
-internal highlight_token_array rained_clang_tokens_from_range(rained_clang_state *state, rained_buffer *buffer, u32 position, u32 length, arena *arena)
+internal highlight_token_array rained_clang_tokens_from_file(rained_clang_state *state, string path, arena *arena)
 {
-    CXFile file = clang_getFile(state->translation_unit, buffer->path.p);
+    CXFile file = clang_getFile(state->translation_unit, path.p);
 
-    // note: quick fix for the fact that we're wrongly passing the buffer pointer...
-    u64 buffer_size = 0;
-    clang_getFileContents(state->translation_unit, file, &buffer_size);
-    length = min(buffer_size, length);
+    u64 file_size = 0;
+    clang_getFileContents(state->translation_unit, file, &file_size);
 
     PROFILE_BEGIN("clang_tokenize");
-    CXSourceLocation begin = clang_getLocationForOffset(state->translation_unit, file, position);
-    CXSourceLocation end = clang_getLocationForOffset(state->translation_unit, file, position + length);
+    CXSourceLocation begin = clang_getLocationForOffset(state->translation_unit, file, 0);
+    CXSourceLocation end = clang_getLocationForOffset(state->translation_unit, file, file_size);
 
     CXSourceRange range = clang_getRange(begin, end);
     CXToken *cxtokens = 0;
@@ -318,7 +353,7 @@ internal highlight_token_array rained_clang_query_tokens_for_file(rained_clang_s
             }
             if(entry->front.tu_version != state->tu_version)
             {       
-                //entry->update = 1;
+                entry->update = 1;
             }
             rained_clang_unlock();
             return entry->front.arr;
@@ -364,21 +399,24 @@ typedef struct
 internal void rained_clang_thread_entry_point(void *data)
 {
     rained_clang_thread_context *ctx = (rained_clang_thread_context *)data;
+
+    rained_clang_lock();
     ctx->state->index = clang_createIndex(0, 0);
+    rained_clang_unlock();
 
     while(1)
     {
         rained_clang_lock();
         if(ctx->state->reparse)
         {
-            ctx->state->reparse = 0;
-
             rained_clang_unlock();
-            rained_clang_parse_the_whole_thing(ctx->state, ctx->state->reparse_buffers);
+            rained_clang_parse_the_whole_thing(ctx->state, ctx->state->reparse_buffers, ctx->state->num_reparse_buffers);
             rained_clang_lock();
 
+            ctx->state->reparse = 0;
             ctx->state->tu_version++;
         }
+
         file_token_cache_entry *entry = ctx->state->token_cache;
         while(entry)
         {
@@ -386,7 +424,7 @@ internal void rained_clang_thread_entry_point(void *data)
             {
                 rained_clang_unlock();
                 arena_reset(entry->back.arena);
-                highlight_token_array tokens = rained_clang_tokens_from_range(ctx->state, entry->buffer, 0, entry->buffer->text_size, entry->back.arena);
+                highlight_token_array tokens = rained_clang_tokens_from_file(ctx->state, entry->buffer->path, entry->back.arena);
                 rained_clang_lock();
                 entry->back.arr = tokens;
                 entry->update = 0;
@@ -394,6 +432,9 @@ internal void rained_clang_thread_entry_point(void *data)
             }
             entry = entry->next;
         }
+
+        arena_reset(ctx->state->arena);
+
         rained_clang_unlock();
 
 #ifdef SPALL_ENABLED

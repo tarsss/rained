@@ -509,6 +509,17 @@ internal string arena_push_cstring(arena_t *arena, char *cstring)
     return str;
 }
 
+internal string arena_push_string_terminate(arena *arena, string str)
+{
+    string res = 
+    {
+        .length = str.length,
+        .p = arena_copy(arena, str.p, str.length + 1),
+    };
+    res.p[str.length] = '\0';
+    return str;
+}
+
 internal b32 string_match(string a, string b)
 {
     if(a.length != b.length)

@@ -37,29 +37,30 @@ typedef struct
 typedef struct file_token_cache_entry file_token_cache_entry;
 struct file_token_cache_entry
 {
+    // todo: store a file id or a path instead of referencing the buffer...
+    rained_buffer                   *buffer;
     file_token_cache_entry_tokens   front;
     file_token_cache_entry_tokens   back;
-    rained_buffer                   *buffer;
     file_token_cache_entry          *next;
     b32                             update;
 };
 
 typedef struct
 {
-    CXFile              file;
-    enum CXCursorKind   kind;
-    char                *display_name;
-    char                *spelling;
-    u32                 offset, line, column, length;
+    string data;
+    string path;
 
-} ast_node;
+} buffer_snapshot;
 
 struct rained_clang_state
 {
     volatile u32                        lock;
 
+    arena                               *arena;
+
     b32                                 reparse;
-    rained_buffer                       *reparse_buffers;
+    buffer_snapshot                     *reparse_buffers;
+    u32                                 num_reparse_buffers;
 
     CXIndex                             index;
     CXTranslationUnit                   translation_unit;

@@ -14,6 +14,7 @@ typedef struct
     rained_clang_state  *clang_state;
     u32                 font_size;
     font_atlas          font;
+    b32                 reparse_pending;
 
 } rained_state;
 
@@ -1000,7 +1001,7 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
             }
         }
     }
-
+    
     if(!view->is_a_command_view && view->buffer->path.p)
     {
         highlight_token_array arr = rained_clang_query_tokens_for_file(global_state.clang_state, view->buffer);
@@ -1011,7 +1012,7 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
             u32 color = 0;
 
             // apply edits between the version of the buffer that was used for the latest token cache update and the current one...
-#if 1
+#if 0
             text_edit *e = view->buffer->edits_since_token_cache_update_scheduled;
             while(e)
             {
@@ -1230,6 +1231,7 @@ internal renderer_command *draw(rained_input *input)
         global_state.font_size = 18;
         
         global_state.clang_state = arena_push_struct_zero(global_state.forever_arena, rained_clang_state);
+        global_state.clang_state->arena = arena_alloc(tb(1), mb(1));
         arena *clang_arena = arena_alloc(gb(1), mb(1));
         rained_clang_thread_context *ctx = arena_push_struct(clang_arena, rained_clang_thread_context);
         *ctx = (rained_clang_thread_context)
@@ -1605,9 +1607,11 @@ internal renderer_command *draw(rained_input *input)
         buffer->is_dirty = 0;
         buffer = buffer->next;
     }
-    if(any_buffer_is_dirty)
+    global_state.reparse_pending |= any_buffer_is_dirty;
+    if(global_state.reparse_pending)
     {
-        rained_clang_schedule_reparse(global_state.clang_state, global_state.buffers);
+        b32 scheduled = rained_clang_schedule_reparse(global_state.clang_state, global_state.buffers);
+        global_state.reparse_pending = !scheduled;
     }
     
     // todo: doesn't work the way i want it to when mouse leaves the client area. im not sure what to do about this right now

@@ -38,13 +38,13 @@ internal b32 rained_clang_schedule_reparse(rained_clang_state *state, rained_buf
         return 0;
     }
     state->reparse = 1;
-
+    
     state->num_reparse_buffers = 0;
     rained_buffer *b = buffers;
     while(b)
     {
         state->num_reparse_buffers++;
-        b->edits_since_token_cache_update_scheduled = 0;
+        b->schedule_edits = 0;
         b = b->next;
     }
 
@@ -339,6 +339,7 @@ internal highlight_token_array rained_clang_tokens_from_file(rained_clang_state 
 
 internal highlight_token_array rained_clang_query_tokens_for_file(rained_clang_state *state, rained_buffer *buffer)
 {
+    PROFILE_BEGIN("query tokens");
     rained_clang_lock();
     file_token_cache_entry *entry = state->token_cache;
     while(entry)
@@ -352,10 +353,16 @@ internal highlight_token_array rained_clang_query_tokens_for_file(rained_clang_s
                 entry->back = temp;
             }
             if(entry->front.tu_version != state->tu_version)
-            {       
+            {
                 entry->update = 1;
             }
+            if(entry->flag)
+            {
+                entry->flag = 0;
+                buffer->patch_edits = buffer->schedule_edits;
+            }
             rained_clang_unlock();
+            PROFILE_END();
             return entry->front.arr;
         }
         entry = entry->next;
@@ -384,6 +391,7 @@ internal highlight_token_array rained_clang_query_tokens_for_file(rained_clang_s
 
     rained_clang_unlock();
     
+    PROFILE_END();
     return (highlight_token_array)
     {
         .num_tokens = 0
@@ -407,6 +415,13 @@ internal void rained_clang_thread_entry_point(void *data)
     while(1)
     {
         rained_clang_lock();
+
+        if(!ctx->state->run)
+        {
+            rained_clang_unlock();
+            continue;
+        }
+            
         if(ctx->state->reparse)
         {
             rained_clang_unlock();
@@ -428,12 +443,15 @@ internal void rained_clang_thread_entry_point(void *data)
                 rained_clang_lock();
                 entry->back.arr = tokens;
                 entry->update = 0;
+                entry->flag = 1;
                 entry->back.tu_version = ctx->state->tu_version;
             }
             entry = entry->next;
         }
 
         arena_reset(ctx->state->arena);
+
+        ctx->state->run = 0;
 
         rained_clang_unlock();
 

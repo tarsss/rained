@@ -91,14 +91,132 @@ internal void caret_move_left(rained_view *view, caret *caret)
     caret->wish_column = caret_get_column(view, caret);
 }
 
-internal void caret_move_next_word(rained_view *view, caret *caret)
+typedef enum
 {
+    character_jump_point,
+    character_whitespace,
+    character_newline,
+    character_other
 
+} character_kind;
+
+internal character_kind get_character_kind(c8 c)
+{
+    switch(c)
+    {
+        case '`':
+        case '~':
+        case '!':
+        case '@':
+        case '#':
+        case '$':
+        case '%':
+        case '^':
+        case '&':
+        case '*':
+        case '(':            
+        case ')':
+        case '-':
+        case '=':
+        case '+':
+        case '[':
+        case '{':
+        case ']':
+        case '}':
+        case '\\':
+        case '|':
+        case ';':
+        case ':':
+        case '\'':
+        case '"':
+        case ',':
+        case '.':
+        case '<':
+        case '>':
+        case '/':
+        case '?':
+        {
+            return character_jump_point;
+        }
+        case ' ':
+        {
+            return character_whitespace;
+        }
+        case '\r':
+        case '\n':
+        {
+            return character_newline;
+        }
+        default:
+        {
+            return character_other;
+        }
+    }
 }
 
-internal void caret_move_prev_word(rained_view *view, caret *caret)
-{
+internal void caret_jump_right(rained_view *view, caret *caret)
+{    
+    character_kind first = get_character_kind(view->buffer->text[caret->position]);
+    character_kind prev = first;
+    character_kind cur;
+    while(1)
+    {
+        caret->position++;
+        if(caret->position == view->buffer->text_size)
+        {
+            break;
+        }
+        cur = get_character_kind(view->buffer->text[caret->position]);
+        if(prev != cur)
+        {
+            if(first == character_whitespace)
+            {
+                break;
+            }
+            else
+            {
+                if(cur != character_whitespace || cur == character_newline)
+                {
+                    break;
+                }
+            }
+        }
+        prev = cur;
+    }
+    caret->wish_column = caret_get_column(view, caret);
+}
 
+internal void caret_jump_left(rained_view *view, caret *caret)
+{
+    if(caret->position)
+    {
+        caret->position--;
+        character_kind first = get_character_kind(view->buffer->text[caret->position]);
+        character_kind cur = first;
+        character_kind next;
+        while(caret->position)
+        {        
+            next = get_character_kind(view->buffer->text[caret->position - 1]);
+    
+            if(next != cur)
+            {
+                if(first == character_whitespace)
+                {
+                    if(cur != character_whitespace)
+                    {
+                        break;
+                    }
+                }
+                else
+                {
+                    break;
+                }
+            }
+            cur = next;
+            caret->position--;
+        }
+    }
+    caret->wish_column = caret_get_column(view, caret);
 }
 
 internal void caret_move_to_prev_line(rained_buffer *buffer, caret *caret)
@@ -202,9 +320,13 @@ internal void edit_buffer_push(rained_buffer *buffer, text_edit *entry)
         buffer->edit_buffer_position = entry;
         buffer->edit_buffer_tail = entry;
     }
-    if(!buffer->edits_since_token_cache_update_scheduled)
+    if(!buffer->patch_edits)
     {
-        buffer->edits_since_token_cache_update_scheduled = entry;
+        buffer->patch_edits = entry;
+    }
+    if(!buffer->schedule_edits)
+    {
+        buffer->schedule_edits = entry;
     }
 }
 
@@ -1004,6 +1126,7 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
     
     if(!view->is_a_command_view && view->buffer->path.p)
     {
+        PROFILE_BEGIN("tokens");
         highlight_token_array arr = rained_clang_query_tokens_for_file(global_state.clang_state, view->buffer);
 
         for(u32 i = 0; i < arr.num_tokens; i++)
@@ -1012,8 +1135,8 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
             u32 color = 0;
 
             // apply edits between the version of the buffer that was used for the latest token cache update and the current one...
-#if 0
-            text_edit *e = view->buffer->edits_since_token_cache_update_scheduled;
+#if 1
+            text_edit *e = view->buffer->patch_edits;
             while(e)
             {
                 if(e->kind == TEXT_EDIT_INSERT)
@@ -1082,7 +1205,7 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
                 }
             }
         }
-
+        PROFILE_END();
     }
 
     push_renderer_command(ctx, (renderer_command)
@@ -1554,21 +1677,27 @@ internal renderer_command *draw(rained_input *input)
                     {
                         caret->position = find_line_start(view->buffer, caret->position);
                         caret->wish_column = caret_get_column(view, caret);
+                        caret->selection_active = (e.code & MODIFIER_SHIFT);
                         view->fit_caret = 1;
                     }
                     else if(e.code == (KEY_RIGHT | MODIFIER_CTRL | MODIFIER_ALT) || e.code == (KEY_RIGHT | MODIFIER_CTRL | MODIFIER_ALT | MODIFIER_SHIFT))
                     {
                         caret->position = find_line_end(view->buffer, caret->position);
                         caret->wish_column = caret_get_column(view, caret);
+                        caret->selection_active = (e.code & MODIFIER_SHIFT);
                         view->fit_caret = 1;
                     }
-                    else if(e.code == (KEY_RIGHT | MODIFIER_CTRL))
+                    else if(e.code == (KEY_RIGHT | MODIFIER_CTRL) || e.code == (KEY_RIGHT | MODIFIER_CTRL | MODIFIER_SHIFT))
                     {
-                        caret_move_next_word(view, caret);
+                        caret_jump_right(view, caret);
+                        caret->selection_active = (e.code & MODIFIER_SHIFT);
+                        view->fit_caret = 1;
                     }
-                    else if(e.code == (KEY_LEFT | MODIFIER_CTRL))
+                    else if(e.code == (KEY_LEFT | MODIFIER_CTRL) || e.code == (KEY_LEFT | MODIFIER_CTRL | MODIFIER_SHIFT))
                     {
-                        caret_move_prev_word(view, caret);
+                        caret_jump_left(view, caret);
+                        caret->selection_active = (e.code & MODIFIER_SHIFT);
+                        view->fit_caret = 1;
                     }
                     else if(e.code == KEY_HOME)
                     {
@@ -1607,7 +1736,9 @@ internal renderer_command *draw(rained_input *input)
         buffer->is_dirty = 0;
         buffer = buffer->next;
     }
+
     global_state.reparse_pending |= any_buffer_is_dirty;
+
     if(global_state.reparse_pending)
     {
         b32 scheduled = rained_clang_schedule_reparse(global_state.clang_state, global_state.buffers);
@@ -1674,6 +1805,10 @@ internal renderer_command *draw(rained_input *input)
         },
         .quad.color = 0x001F1F1F
     });
+
+    rained_clang_lock();
+    global_state.clang_state->run = 1;
+    rained_clang_unlock();
 
     return ctx.commands_first;
 }

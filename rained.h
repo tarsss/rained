@@ -338,7 +338,8 @@ struct rained_buffer
     arena               *edit_buffer_arena;
     text_edit           *edit_buffer_tail;
     text_edit           *edit_buffer_position;
-    text_edit           *edits_since_token_cache_update_scheduled;
+    text_edit           *patch_edits;
+    text_edit           *schedule_edits;
     
     b32                 is_dirty;
     rained_buffer       *next;
@@ -382,6 +383,7 @@ internal void os_clipboard_set(string text);
 internal font_atlas os_make_font_atlas(u32 size, arena *scratch);
 internal void os_release_font_atlas(font_atlas atlas);
 internal void os_debug_output_string(char *str);
+internal void os_debug_printf(char *format, ...);
 internal void os_create_thread(void (* routine)(void *), void *data, c16 *name);
 
 typedef struct

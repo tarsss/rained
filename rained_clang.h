@@ -43,6 +43,7 @@ struct file_token_cache_entry
     file_token_cache_entry_tokens   back;
     file_token_cache_entry          *next;
     b32                             update;
+    b32                             flag;
 };
 
 typedef struct
@@ -55,6 +56,7 @@ typedef struct
 struct rained_clang_state
 {
     volatile u32                        lock;
+    volatile u32                        run;
 
     arena                               *arena;
 

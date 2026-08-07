@@ -30,7 +30,7 @@ i16                         mouse_wheel_delta_accum;
 f32                         mouse_wheel_delta;
 i32                         mouse_x, mouse_y;
 b32                         lmb, rmb, mmb;
-char                        buf[64]; // for sprintf, dumb
+char                        sprintf_buf[64]; // for sprintf, dumb
 u64                         frame_start;
 u32                         cell_buffer_count;
 DWORD                       thread_context_tls_index;
@@ -376,6 +376,15 @@ internal void os_debug_output_string(char *str)
     OutputDebugStringA(str);
 }
 
+internal void os_debug_printf(char *format, ...)
+{
+    va_list va;
+    va_start(va, format);
+    stbsp_vsprintf(sprintf_buf, format, va);
+    os_debug_output_string(sprintf_buf);
+    va_end(va);
+}
+
 internal rained_thread_context *rained_alloc_thread_context()
 {
     arena *arena = arena_alloc(mb(1), kb(4));
@@ -428,8 +437,8 @@ LRESULT window_callback(HWND window,
     WPARAM wParam,
     LPARAM lParam)
 {
-    stbsp_sprintf(buf, "msg 0x%04X\n", message);
-    PROFILE_BEGIN(buf);
+    stbsp_sprintf(sprintf_buf, "msg 0x%04X\n", message);
+    PROFILE_BEGIN(sprintf_buf);
     LRESULT result = 0;
     switch (message)
     {

@@ -154,19 +154,16 @@ internal character_kind get_character_kind(c8 c)
     }
 }
 
-internal void caret_jump_right(rained_view *view, caret *caret)
-{    
-    character_kind first = get_character_kind(view->buffer->text[caret->position]);
+internal u32 caret_next_token(rained_view *view, caret *caret)
+{
+    u32 pos = caret->position;
+    character_kind first = get_character_kind(view->buffer->text[pos]);
     character_kind prev = first;
     character_kind cur;
-    while(1)
+    while(pos != view->buffer->text_size)
     {
-        caret->position++;
-        if(caret->position == view->buffer->text_size)
-        {
-            break;
-        }
-        cur = get_character_kind(view->buffer->text[caret->position]);
+        pos++;
+        cur = get_character_kind(view->buffer->text[pos]);
         if(prev != cur)
         {
             if(first == character_whitespace)
@@ -183,20 +180,21 @@ internal void caret_jump_right(rained_view *view, caret *caret)
         }
         prev = cur;
     }
-    caret->wish_column = caret_get_column(view, caret);
+    return pos;
 }
 
-internal void caret_jump_left(rained_view *view, caret *caret)
+internal u32 caret_prev_token(rained_view *view, caret *caret)
 {
-    if(caret->position)
+    u32 pos = caret->position;
+    if(pos)
     {
-        caret->position--;
-        character_kind first = get_character_kind(view->buffer->text[caret->position]);
+        pos--;
+        character_kind first = get_character_kind(view->buffer->text[pos]);
         character_kind cur = first;
         character_kind next;
-        while(caret->position)
+        while(pos)
         {        
-            next = get_character_kind(view->buffer->text[caret->position - 1]);
+            next = get_character_kind(view->buffer->text[pos - 1]);
     
             if(next != cur)
             {
@@ -213,9 +211,21 @@ internal void caret_jump_left(rained_view *view, caret *caret)
                 }
             }
             cur = next;
-            caret->position--;
+            pos--;
         }
     }
+    return pos;
+}
+
+internal void caret_jump_right(rained_view *view, caret *caret)
+{    
+    caret->position = caret_next_token(view, caret);
+    caret->wish_column = caret_get_column(view, caret);
+}
+
+internal void caret_jump_left(rained_view *view, caret *caret)
+{
+    caret->position = caret_prev_token(view, caret);
     caret->wish_column = caret_get_column(view, caret);
 }
 
@@ -1247,7 +1257,7 @@ internal void draw_tile(draw_context *ctx, rained_tile *tile, b32 is_focused, f3
     }
 }
 
-internal void carets_delete_a_character_or_selection(rained_view *view)
+internal void carets_delete(rained_view *view, b32 delete_to_the_right, b32 delete_until_next_token)
 {
     text_edit_delete delete = 
     {
@@ -1256,20 +1266,41 @@ internal void carets_delete_a_character_or_selection(rained_view *view)
     for(u32 j = 0; j < view->num_carets; j++)
     {
         caret *caret = &view->carets[j];
-        u32 length = 0;
-        if(caret->selection_active)
+        u32 length = 1;
+
+        if(delete_until_next_token)
         {
-            if(caret->position > caret->selection_pos)
+            if(delete_to_the_right)
             {
-                length = caret->position - caret->selection_pos;
+                length = caret_next_token(view, caret) - caret->position;
+                caret->position += length;
             }
             else
             {
-                length = caret->selection_pos - caret->position;
-                caret->position = caret->selection_pos;
+                length = caret->position - caret_prev_token(view, caret);
             }
         }
-        delete.lengths[j] = max(1, length);
+        else
+        {
+            if(caret->selection_active)
+            {
+                if(caret->position > caret->selection_pos)
+                {
+                    length = caret->position - caret->selection_pos;
+                }
+                else
+                {
+                    length = caret->selection_pos - caret->position;
+                    caret->position = caret->selection_pos;
+                }
+            }
+            else if(delete_to_the_right)
+            {
+                caret->position += length;
+            }
+        }
+
+        delete.lengths[j] = length;
         caret->selection_active = 0;
     }
     carets_remove_characters(view, delete, 1);
@@ -1556,17 +1587,20 @@ internal renderer_command *draw(rained_input *input)
                         tile_pop_view(global_state.focused_tile);
                     }
                 }
+                else if(e.code == KEY_BACKSPACE || e.code == (KEY_BACKSPACE | MODIFIER_CTRL))
+                {
+                    carets_delete(view, 0, e.code & MODIFIER_CTRL);
+                }
+                else if(e.code == KEY_DELETE || e.code == (KEY_DELETE | MODIFIER_CTRL))
+                {
+                    carets_delete(view, 1, e.code & MODIFIER_CTRL);
+                }
             }
         }
 
         if(e.type == INPUT_EVENT_TEXT)
         {
-            if(e.character == '\b')
-            {
-                carets_delete_a_character_or_selection(view);
-            }
-
-            if(e.character > 31 && e.character != '`') // i've lost my enter key
+            if(e.character > 31 && e.character < 127 && e.character != '`') // i've lost my enter key
             {
                 text_edit_insert insert = 
                 {

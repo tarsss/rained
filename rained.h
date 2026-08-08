@@ -117,6 +117,7 @@ typedef enum KEY_MODIFIER
 
 typedef enum KEY_CODE
 {
+    KEY_BACKSPACE = 0x08,
     KEY_SHIFT = 0x10,
     KEY_CTRL = 0x11,
     KEY_ALT = 0x12,
@@ -129,6 +130,7 @@ typedef enum KEY_CODE
     KEY_UP = 0x26,
     KEY_RIGHT = 0x27,
     KEY_DOWN = 0x28,
+    KEY_DELETE = 0x2E,
     KEY_F1 = 0x70,
     KEY_F2 = 0x71,
     KEY_F3 = 0x72,
@@ -147,7 +149,6 @@ typedef enum KEY_CODE
     KEY_MINUS = 0xBD,
     KEY_PERIOD = 0xBE,
     KEY_THE_ONE_RIGHT_BELOW_ESCAPE = 0xC0,
-    
     
 } KEY_CODE;
 

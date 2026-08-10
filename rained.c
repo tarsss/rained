@@ -1144,6 +1144,20 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
             highlight_token t = arr.tokens[i];
             u32 color = 0;
 
+            switch(t.kind)
+            {
+                case highlight_token_function: color = d_color_token_function; break;
+                case highlight_token_macro: color = d_color_token_macro; break;
+                case highlight_token_type: color = d_color_token_type; break;
+                case highlight_token_keyword: color = d_color_token_keyword; break;
+                case highlight_token_comment: color = d_color_token_comment; break;
+    
+                default:
+                {
+                    continue;
+                }
+            }
+
             // apply edits between the version of the buffer that was used for the latest token cache update and the current one...
 #if 1
             text_edit *e = view->buffer->patch_edits;
@@ -1186,22 +1200,18 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
                 }
                 e = e->next;
             }
-#endif 
+#endif
 
-            switch(t.kind)
+            if(t.offset + t.length < p)
             {
-                case highlight_token_function: color = d_color_token_function; break;
-                case highlight_token_macro: color = d_color_token_macro; break;
-                case highlight_token_type: color = d_color_token_type; break;
-                case highlight_token_keyword: color = d_color_token_keyword; break;
-                case highlight_token_comment: color = d_color_token_comment; break;
-    
-                default:
-                {
-                    continue;
-                }
+                continue;
             }
-            
+
+            if(t.offset > chopped.lines[chopped.count - 1].pos_in_text)
+            {
+                break;
+            }
+
             for(i32 y = 0; y < count; y++)
             {
                 chopped_line *l = &chopped.lines[offset_lines + y];
@@ -1839,10 +1849,6 @@ internal renderer_command *draw(rained_input *input)
         },
         .quad.color = 0x001F1F1F
     });
-
-    rained_clang_lock();
-    global_state.clang_state->run = 1;
-    rained_clang_unlock();
 
     return ctx.commands_first;
 }

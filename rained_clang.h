@@ -56,7 +56,6 @@ typedef struct
 struct rained_clang_state
 {
     volatile u32                        lock;
-    volatile u32                        run;
 
     arena                               *arena;
 

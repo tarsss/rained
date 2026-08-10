@@ -251,35 +251,21 @@ internal highlight_token_array rained_clang_tokens_from_file(rained_clang_state 
         CXToken cxtoken = cxtokens[i];
         CXTokenKind kind = clang_getTokenKind(cxtoken);
         highlight_token t;
+        t.kind = 0;
+
         switch(kind)
         {
             case CXToken_Keyword:
-            case CXToken_Comment:
             {
-                if(kind == CXToken_Keyword)
-                {
-                    t.kind = highlight_token_keyword;
-                }
-                if(kind == CXToken_Comment)
-                {
-                    t.kind = highlight_token_comment;
-                }
-
-                CXSourceRange token_range = clang_getTokenExtent(state->translation_unit, cxtoken);
-                CXSourceLocation token_start = clang_getRangeStart(token_range);
-                CXSourceLocation token_end = clang_getRangeEnd(token_range);
-                u32 token_start_offset, token_end_offset;
-                clang_getFileLocation(token_start, 0, 0, 0, &token_start_offset);
-                clang_getFileLocation(token_end, 0, 0, 0, &token_end_offset);
-        
-                t.offset = token_start_offset;
-                t.length = token_end_offset - token_start_offset;
-                *((highlight_token*)arena_push_struct_noalign(arena, highlight_token)) = t;
-                num_tokens++;
-                
+                t.kind = highlight_token_keyword;
                 break;
             }
-            default:
+            case CXToken_Comment:
+            {
+                t.kind = highlight_token_comment;
+                break;
+            }
+            case CXToken_Identifier:
             {
                 CXCursor cursor = cxcursors[i];
                 enum CXCursorKind cursor_kind = clang_getCursorKind(cursor);
@@ -306,25 +292,40 @@ internal highlight_token_array rained_clang_tokens_from_file(rained_clang_state 
                         t.kind = highlight_token_type;
                         break;
                     }
-                    default: 
+                    default:
                     {
-                        continue;
+                        break;
                     }
                 }
-
-                CXSourceRange range = clang_Cursor_getSpellingNameRange(cursor,0,0);
-                CXSourceLocation range_start = clang_getRangeStart(range);
-                CXSourceLocation range_end = clang_getRangeEnd(range);
-                u32 offset;
-                u32 end_offset = 0;
-                clang_getFileLocation(range_start, 0, 0, 0, &offset);
-                clang_getFileLocation(range_end, 0, 0, 0, &end_offset);
-                t.offset = offset;
-                t.length = end_offset - offset;
-                *((highlight_token*)arena_push_struct_noalign(arena, highlight_token)) = t;
-                num_tokens++;
+                break;
+            }
+            default:
+            {
+                break;
             }
         }
+
+        if(t.kind)
+        {
+            CXSourceRange token_range = clang_getTokenExtent(state->translation_unit, cxtoken);
+            CXSourceLocation token_start = clang_getRangeStart(token_range);
+            CXSourceLocation token_end = clang_getRangeEnd(token_range);
+            u32 token_start_offset, token_end_offset;
+            clang_getFileLocation(token_start, 0, 0, 0, &token_start_offset);
+            clang_getFileLocation(token_end, 0, 0, 0, &token_end_offset);
+    
+            t.offset = token_start_offset;
+    
+            if(num_tokens)
+            {
+                assert(tokens[num_tokens - 1].offset <= t.offset);
+            }
+    
+            t.length = token_end_offset - token_start_offset;
+            *((highlight_token*)arena_push_struct_noalign(arena, highlight_token)) = t;
+            num_tokens++;
+        }
+
     }
 
     clang_disposeTokens(state->translation_unit, cxtokens, num_cxtokens);
@@ -340,7 +341,9 @@ internal highlight_token_array rained_clang_tokens_from_file(rained_clang_state 
 internal highlight_token_array rained_clang_query_tokens_for_file(rained_clang_state *state, rained_buffer *buffer)
 {
     PROFILE_BEGIN("query tokens");
+    PROFILE_BEGIN("lock");
     rained_clang_lock();
+    PROFILE_END();
     file_token_cache_entry *entry = state->token_cache;
     while(entry)
     {
@@ -415,12 +418,6 @@ internal void rained_clang_thread_entry_point(void *data)
     while(1)
     {
         rained_clang_lock();
-
-        if(!ctx->state->run)
-        {
-            rained_clang_unlock();
-            continue;
-        }
             
         if(ctx->state->reparse)
         {
@@ -450,8 +447,6 @@ internal void rained_clang_thread_entry_point(void *data)
         }
 
         arena_reset(ctx->state->arena);
-
-        ctx->state->run = 0;
 
         rained_clang_unlock();
 

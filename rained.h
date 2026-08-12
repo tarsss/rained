@@ -74,9 +74,6 @@ typedef u16         c16;
 #define gb(n) ((u64)n << 30)
 #define tb(n) ((u64)n << 40)
 
-#define min(a,b) (a < b ? a : b)
-#define max(a,b) (a > b ? a : b)
-
 #define PAGE_SIZE 4096
 
 u32 ceil_pow2_u32(u32 n)
@@ -213,31 +210,12 @@ typedef struct
     
 } caret;
 
-typedef enum
-{
-    TEXT_EDIT_INSERT,
-    TEXT_EDIT_DELETE,
-
-} text_edit_kind;
-
-typedef struct
-{
-    u32     *lengths;
-
-} text_edit_delete;
-
 typedef struct
 {
     char    *p;
     u32     length;
 
 } string;
-
-typedef struct
-{
-    string  *strings;
-
-} text_edit_insert;
 
 typedef struct
 {
@@ -316,10 +294,15 @@ struct text_edit
 {
     text_edit           *prev;
     text_edit           *next;
-    caret               *carets;
-    string              *strings;
-    u32                 num_carets; 
-    text_edit_kind      kind;
+    string              string;
+    u32                 position;
+    b8                  additive;
+};
+
+typedef struct undo_buffer_entry undo_buffer_entry;
+struct undo_buffer_entry
+{
+    
 };
 
 typedef struct rained_buffer rained_buffer;
@@ -336,11 +319,13 @@ struct rained_buffer
         };
         string          text_string;
     };
-    arena               *edit_buffer_arena;
-    text_edit           *edit_buffer_tail;
-    text_edit           *edit_buffer_position;
+
+    arena               *arena1;
+    text_edit           *edits;
     text_edit           *patch_edits;
     text_edit           *schedule_edits;
+    undo_buffer_entry   *undo_buffer_tail;
+    undo_buffer_entry   *undo_buffer_position;
     
     b32                 is_dirty;
     rained_buffer       *next;
@@ -555,8 +540,9 @@ internal string string_copy(string str, arena *arena)
 }
 
 #define sll_push_queue(first, last, e) { if(!first) { first = e; } if(last) { last->next = e; } last = e; }
-#define sll_push(sll, e) { void *t = sll; sll = e; e->next = t; }
+#define sll_push(sll, e) { e->next = sll; sll = e; }
 #define sll_pop(sll) if(sll) { sll = sll->next; }
+#define dll_push(dll, e) { e->next = dll; if(dll) { dll->prev = e; } dll = e; }
 
 #ifdef SPALL_ENABLED
 

@@ -317,19 +317,36 @@ internal void carets_bubble_sort_top_to_bottom(rained_view *view)
     }
 }
 
-internal void edit_buffer_push(rained_buffer *buffer, text_edit *entry)
+internal void buffer_apply_edit(rained_buffer *buffer, text_edit *edit)
 {
-    if(buffer->edit_buffer_position)
+    if(edit->additive)
     {
-        buffer->edit_buffer_position->next = entry;
-        entry->prev = buffer->edit_buffer_position;
-        buffer->edit_buffer_position = entry;
+        buffer->text_arena->used += edit->string.length;
+        arena_commit_to_fit_used(buffer->text_arena);
+        for(u32 i = buffer->text_size + edit->string.length - 1; i >= edit->position + edit->string.length; i--)
+        {
+            buffer->text[i] = buffer->text[i - edit->string.length];
+        }
+        for(u32 i = 0; i < edit->string.length; i++)
+        {
+            buffer->text[edit->position + i] = edit->string.p[i];
+        }
+        buffer->text_size += edit->string.length;
     }
     else
     {
-        buffer->edit_buffer_position = entry;
-        buffer->edit_buffer_tail = entry;
+        for(u32 i = edit->position; i < buffer->text_size - edit->string.length; i++)
+        {
+            buffer->text[i] = buffer->text[i + edit->string.length];
+        }
+        buffer->text_size -= edit->string.length;
+        buffer->text_arena->used -= edit->string.length;   
     }
+}
+
+internal void buffer_push_edit(rained_buffer *buffer, text_edit *entry)
+{
+    dll_push(buffer->edits, entry);
     if(!buffer->patch_edits)
     {
         buffer->patch_edits = entry;
@@ -340,75 +357,65 @@ internal void edit_buffer_push(rained_buffer *buffer, text_edit *entry)
     }
 }
 
-internal void carets_insert_characters(rained_view *view, text_edit_insert insert, b32 push_edit)
+internal text_edit *buffer_push_insert_edit(rained_buffer *buffer, u32 position, string insert)
+{
+    text_edit *e = arena_push_struct(buffer->arena1, text_edit);
+    *e = (text_edit)
+    {
+        .additive = 1,
+        .position = position
+    };
+    e->string.length = insert.length;
+    e->string.p = arena_copy(buffer->arena1, insert.p, insert.length);
+    buffer_push_edit(buffer, e);
+    return e;
+}
+
+internal text_edit *buffer_push_delete_edit(rained_buffer *buffer, u32 position, u32 length)
+{
+    text_edit *e = arena_push_struct(buffer->arena1, text_edit);
+    *e = (text_edit)
+    {
+        .additive = 0,
+        .position = position
+    };
+    e->string.length = length;
+    e->string.p = arena_copy(buffer->arena1, buffer->text + position, length);
+    buffer_push_edit(buffer, e);
+    return e;
+}
+
+internal void carets_insert_string(rained_view *view, string insert)
 {
     carets_bubble_sort_top_to_bottom(view);
     u32 offset = 0;
     for(u32 c = 0; c < view->num_carets; c++)
     {
-        string s = insert.strings[c];
         caret *caret = &view->carets[c];
-        if(s.length)
+        if(insert.length)
         {
-            view->buffer->text_arena->used += s.length;
-            arena_commit_to_fit_used(view->buffer->text_arena);
             caret->position += offset;
-            offset += s.length;
-            u32 p = caret->position;
-            for(u32 i = view->buffer->text_size + s.length - 1; i >= p + s.length; i--)
-            {
-                view->buffer->text[i] = view->buffer->text[i - s.length];
-            }
-            for(u32 i = 0; i < s.length; i++)
-            {
-                view->buffer->text[p + i] = s.p[i];
-            }
-            view->buffer->text_size += s.length;
-            caret->position += s.length;
+            offset += insert.length;
+            text_edit *e = buffer_push_insert_edit(view->buffer, caret->position, insert);
+            buffer_apply_edit(view->buffer, e);
+            caret->position += insert.length;
+            caret->wish_column = caret_get_column(view, caret);
         }
-        caret->wish_column = caret_get_column(view, caret);
-    }
-    if(push_edit)
-    {
-        text_edit *e = arena_push_struct(view->buffer->edit_buffer_arena, text_edit);
-        *e = (text_edit)
-        {
-            .kind = TEXT_EDIT_INSERT,
-            .carets = arena_copy(view->buffer->edit_buffer_arena, view->carets, sizeof(caret) * view->num_carets),
-            .num_carets = view->num_carets
-        };
-        e->strings = arena_push(view->buffer->edit_buffer_arena, view->num_carets * sizeof(string), 8);
-        for(u32 i = 0; i < view->num_carets; i++)
-        {
-            e->strings[i].length = insert.strings[i].length;
-            e->strings[i].p = arena_copy(view->buffer->edit_buffer_arena, insert.strings[i].p, insert.strings[i].length);
-        }
-        edit_buffer_push(view->buffer, e);
     }
     view->fit_caret = 1;
     view->buffer->is_dirty = 1;
 }
 
-// todo: don't push undo when each num_to_remove = 0
-internal void carets_remove_characters(rained_view *view, text_edit_delete delete, b32 push_edit)
+internal void carets_delete_length(rained_view *view, u32 *lengths)
 {
-    text_edit *e = arena_push_struct(view->buffer->edit_buffer_arena, text_edit);
-    if(push_edit)
-    {
-        *e = (text_edit)
-        {
-            .kind = TEXT_EDIT_DELETE,
-            .strings = arena_push_zero(view->buffer->edit_buffer_arena, sizeof(string) * view->num_carets, 8),
-            .num_carets = view->num_carets,
-        };
-    }
     carets_bubble_sort_top_to_bottom(view);
     u32 offset = 0;
     for(u32 c = 0; c < view->num_carets; c++)
     {
         caret *caret = &view->carets[c];
         caret->position -= offset;
-        u32 num_to_remove = min(delete.lengths[c], caret->position);
+        u32 num_to_remove = min(lengths[c], caret->position);
+        
         // dont leave a stray /r fuhhhh.
         if(caret->position >= num_to_remove + 1)
         {
@@ -418,25 +425,12 @@ internal void carets_remove_characters(rained_view *view, text_edit_delete delet
                 num_to_remove++;
             }
         }
-        if(push_edit)
-        {
-            e->strings[c].p = arena_copy(view->buffer->edit_buffer_arena, view->buffer->text + caret->position - num_to_remove, num_to_remove);
-            e->strings[c].length = num_to_remove;
-        }
+
         offset += num_to_remove;
-        for(u32 i = caret->position - num_to_remove; i < view->buffer->text_size - num_to_remove; i++)
-        {
-            view->buffer->text[i] = view->buffer->text[i + num_to_remove];
-        }
-        view->buffer->text_size -= num_to_remove;
-        view->buffer->text_arena->used -= num_to_remove;
         caret->position -= num_to_remove;
+        text_edit *e = buffer_push_delete_edit(view->buffer, caret->position, num_to_remove);
+        buffer_apply_edit(view->buffer, e);
         caret->wish_column = caret_get_column(view, caret);
-    }
-    if(push_edit)
-    {
-        e->carets = arena_copy(view->buffer->edit_buffer_arena, view->carets, sizeof(caret) * view->num_carets),
-        edit_buffer_push(view->buffer, e);
     }
     view->fit_caret = 1;
     view->buffer->is_dirty = 1;
@@ -474,106 +468,21 @@ internal void caret_spawn_new_above(rained_view *view)
 
 internal void undo(rained_view *view)
 {
-    text_edit *entry = view->buffer->edit_buffer_position;
-    if(entry)
-    {
-        switch(entry->kind)
-        {
-            case TEXT_EDIT_DELETE:
-            {
-                memcpy(view->carets, entry->carets, sizeof(caret) * entry->num_carets);
-                view->num_carets = entry->num_carets;
-                text_edit_insert insert = 
-                {
-                    .strings = entry->strings,
-                };
-                carets_insert_characters(view, insert, 0);
-                break;
-            }
-            case TEXT_EDIT_INSERT:
-            {
-                memcpy(view->carets, entry->carets, sizeof(caret) * entry->num_carets);
-                view->num_carets = entry->num_carets;
-                u32 *lengths = arena_push(global_state.frame_arena, sizeof(u32) * entry->num_carets, 8);
-                for(u32 i = 0; i < entry->num_carets; i++)
-                {
-                    lengths[i] = entry->strings[i].length;
-                }
-                text_edit_delete delete = 
-                {
-                    .lengths = lengths,
-                };
-                carets_remove_characters(view, delete, 0);
-                break;
-            }
-        }
-        view->buffer->edit_buffer_position = entry->prev;
-    }
+    /*
+    copy carets before
+    for each entry...
+    entry.additive = !entry.additive
+    apply_edit
+    */
 }
 
 internal void redo(rained_view *view)
 {
-    if(view->buffer->edit_buffer_position)
-    {
-        if(view->buffer->edit_buffer_position->next)
-        {
-            view->buffer->edit_buffer_position = view->buffer->edit_buffer_position->next;
-        }
-        else
-        {
-            return;
-        }
-    }
-    else
-    {
-        view->buffer->edit_buffer_position = view->buffer->edit_buffer_tail;
-    }
-    text_edit *entry = view->buffer->edit_buffer_position;
-    if(entry)
-    {
-        switch(entry->kind)
-        {
-            case TEXT_EDIT_DELETE:
-            {
-                memcpy(view->carets, entry->carets, sizeof(caret) * entry->num_carets);
-                view->num_carets = entry->num_carets;
-                u32 *lengths = arena_push(global_state.frame_arena, sizeof(u32) * entry->num_carets, 8);
-                for(u32 i = 0; i < entry->num_carets; i++)
-                {
-                    lengths[i] = entry->strings[i].length;
-                }
-                text_edit_delete delete = 
-                {
-                    .lengths = lengths,
-                };
-                u32 offset = 0;
-                for(u32 i = 0; i < view->num_carets; i++)
-                {
-                    offset += entry->strings[i].length;
-                    view->carets[i].position += offset;
-                }
-                carets_remove_characters(view, delete, 0);
-                break;
-            }
-            case TEXT_EDIT_INSERT:
-            {
-                memcpy(view->carets, entry->carets, sizeof(caret) * entry->num_carets);
-                view->num_carets = entry->num_carets;
-                u32 offset = 0;
-                for(u32 i = 0; i < view->num_carets; i++)
-                {
-                    offset += entry->strings[i].length;
-                    view->carets[i].position -= offset;
-                }
-                text_edit_insert insert = 
-                {
-                    .strings = entry->strings,
-                };
-                carets_insert_characters(view, insert, 0);
-                break;
-            }
-        }
-    }
+    /*
+    copy carets after
+    for each entry...
+    apply_edit
+    */
 }
 
 internal rained_buffer *open_empty_buffer(rained_state *state)
@@ -584,7 +493,7 @@ internal rained_buffer *open_empty_buffer(rained_state *state)
     {
         .text = arena_head(text_arena),
         .text_arena = text_arena,
-        .edit_buffer_arena = arena_alloc(gb(1), mb(1)),
+        .arena1 = arena_alloc(gb(1), mb(1)),
     };
     sll_push(state->buffers, buffer);
     return buffer;
@@ -602,7 +511,7 @@ internal rained_buffer *open_buffer_from_file(rained_state *state, string path)
         .text = text,
         .text_arena = text_arena,
         .text_size = file_size,
-        .edit_buffer_arena = arena_alloc(gb(1), mb(1)),
+        .arena1 = arena_alloc(gb(1), mb(1)),
     };
     sll_push(state->buffers, buffer);
     return buffer;
@@ -1159,48 +1068,37 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
             }
 
             // apply edits between the version of the buffer that was used for the latest token cache update and the current one...
-#if 1
             text_edit *e = view->buffer->patch_edits;
             while(e)
             {
-                if(e->kind == TEXT_EDIT_INSERT)
+                if(e->additive)
                 {
-                    for(u32 j = 0; j < e->num_carets; j++)
+                    if(e->position < t.offset)
                     {
-                        u32 edit_len = e->strings[j].length;
-                        u32 edit_pos = e->carets[j].position - e->strings[j].length;
-                        if(edit_pos < t.offset)
+                        t.offset += e->string.length;
+                    }
+                    else if(e->position <= t.offset + t.length)
+                    {
+                        t.length += e->string.length;
+                    }
+                }
+                else
+                {
+                    if(e->position + e->string.length <= t.offset)
+                    {
+                        t.offset -= e->string.length;
+                    }
+                    else if(e->position < t.offset + t.length)
+                    {
+                        t.length -= min(t.offset + t.length, e->position + e->string.length) - max(t.offset, e->position);
+                        if(e->position < t.offset)
                         {
-                            t.offset += edit_len;
-                        }
-                        else if(edit_pos >= t.offset && edit_pos <= t.offset + t.length)
-                        {
-                            t.length += edit_len;
+                            t.offset = e->position;
                         }
                     }
                 }
-                if(e->kind == TEXT_EDIT_DELETE)
-                {
-                    for(u32 j = 0; j < e->num_carets; j++)
-                    {
-                        for(u32 j = 0; j < e->num_carets; j++)
-                        {
-                            u32 edit_len = e->strings[j].length;
-                            u32 edit_pos = e->carets[j].position + e->strings[j].length;
-                            if(edit_pos < t.offset)
-                            {
-                                t.offset -= edit_len;
-                            }
-                            else if(edit_pos >= t.offset && edit_pos - edit_len < t.offset + t.length)
-                            {
-                                t.length -= edit_len;
-                            }
-                        }
-                    }
-                }
-                e = e->next;
+                e = e->prev;
             }
-#endif
 
             if(t.offset + t.length < p)
             {
@@ -1269,10 +1167,8 @@ internal void draw_tile(draw_context *ctx, rained_tile *tile, b32 is_focused, f3
 
 internal void carets_delete(rained_view *view, b32 delete_to_the_right, b32 delete_until_next_token)
 {
-    text_edit_delete delete = 
-    {
-        .lengths = arena_push(global_state.frame_arena, sizeof(u32) * view->num_carets, 8)
-    };
+    u32 *lengths = arena_push(global_state.frame_arena, sizeof(u32) * view->num_carets, 8);
+
     for(u32 j = 0; j < view->num_carets; j++)
     {
         caret *caret = &view->carets[j];
@@ -1310,18 +1206,15 @@ internal void carets_delete(rained_view *view, b32 delete_to_the_right, b32 dele
             }
         }
 
-        delete.lengths[j] = length;
+        lengths[j] = length;
         caret->selection_active = 0;
     }
-    carets_remove_characters(view, delete, 1);
+    carets_delete_length(view, lengths);
 }
 
-internal void carets_insert_or_replace_selection(rained_view *view, text_edit_insert insert, b32 push_edit)
+internal void carets_insert_or_replace_selection_with_string(rained_view *view, string str)
 {
-    text_edit_delete delete = 
-    {
-        .lengths = arena_push(global_state.frame_arena, sizeof(u32) * view->num_carets, 8)
-    };
+    u32 *delete_lengths = arena_push(global_state.frame_arena, sizeof(u32) * view->num_carets, 8);
     b32 do_delete = 0;
     for(u32 j = 0; j < view->num_carets; j++)
     {
@@ -1339,15 +1232,15 @@ internal void carets_insert_or_replace_selection(rained_view *view, text_edit_in
                 caret->position = caret->selection_pos;
             }
         }
-        delete.lengths[j] = length;
+        delete_lengths[j] = length;
         do_delete |= length;
         caret->selection_active = 0;
     }
     if(do_delete)
     {
-        carets_remove_characters(view, delete, push_edit);
+        carets_delete_length(view, delete_lengths);
     }
-    carets_insert_characters(view, insert, push_edit);
+    carets_insert_string(view, str);
 }
 
 
@@ -1554,30 +1447,19 @@ internal renderer_command *draw(rained_input *input)
                         .length = size,
                     });
 
-                    text_edit_delete delete = 
-                    {
-                        .lengths = arena_push(global_state.frame_arena, sizeof(u32) * view->num_carets, 8)
-                    };                
+                    u32 *delete_lengths = arena_push(global_state.frame_arena, sizeof(u32) * view->num_carets, 8);      
                     for(u32 i = 0; i < view->num_carets; i++)
                     {
-                        delete.lengths[i] = ranges[i].length;
+                        delete_lengths[i] = ranges[i].length;
                         view->carets[i].position = ranges[i].start + ranges[i].length;
                         view->carets[i].selection_active = 0;
                     }
-                    carets_remove_characters(view, delete, 1);
+                    carets_delete_length(view, delete_lengths);
                 }
                 else if(e.code == ('V' | MODIFIER_CTRL))
                 {
                     string to_paste = os_clipboard_get(global_state.frame_arena);
-                    text_edit_insert insert = 
-                    {
-                        .strings = arena_push(global_state.frame_arena, sizeof(string) * view->num_carets, 8)
-                    };
-                    for(u32 j = 0; j < view->num_carets; j++)
-                    {
-                        insert.strings[j] = to_paste;
-                    }
-                    carets_insert_or_replace_selection(view, insert, 1);
+                    carets_insert_or_replace_selection_with_string(view, to_paste);
                 }
                 else if(e.code == (KEY_PLUS | MODIFIER_CTRL))
                 {
@@ -1612,36 +1494,22 @@ internal renderer_command *draw(rained_input *input)
         {
             if(e.character > 31 && e.character < 127 && e.character != '`') // i've lost my enter key
             {
-                text_edit_insert insert = 
+                string insert = (string)
                 {
-                    .strings = arena_push(global_state.frame_arena, sizeof(string) * view->num_carets, 8)
+                    .p = &e.character,
+                    .length = 1
                 };
-                for(u32 j = 0; j < view->num_carets; j++)
-                {
-                    insert.strings[j] = (string)
-                    {
-                        .p = &e.character,
-                        .length = 1
-                    };
-                }
-                carets_insert_or_replace_selection(view, insert, 1);
+                carets_insert_or_replace_selection_with_string(view, insert);
             }
             else if(e.character == '\r')
             {
                 char line_end[2] = { '\r', '\n' };
-                text_edit_insert insert = 
+                string insert = (string)
                 {
-                    .strings = arena_push(global_state.frame_arena, sizeof(string) * view->num_carets, 8)
+                    .p = line_end,
+                    .length = 2
                 };
-                for(u32 j = 0; j < view->num_carets; j++)
-                {
-                    insert.strings[j] = (string)
-                    {
-                        .p = line_end,
-                        .length = 2
-                    };
-                }
-                carets_insert_or_replace_selection(view, insert, 1);
+                carets_insert_or_replace_selection_with_string(view, insert);
             }
         }
 

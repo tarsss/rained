@@ -346,7 +346,7 @@ internal void buffer_apply_edit(rained_buffer *buffer, text_edit *edit)
 
 internal void buffer_push_edit(rained_buffer *buffer, text_edit *entry)
 {
-    dll_push(buffer->edits, entry);
+    dll_push(buffer->latest_edit, entry);
     if(!buffer->patch_edits)
     {
         buffer->patch_edits = entry;
@@ -385,6 +385,18 @@ internal text_edit *buffer_push_delete_edit(rained_buffer *buffer, u32 position,
     return e;
 }
 
+internal void push_undo_entry(rained_view *view)
+{
+    undo_buffer_entry *entry = arena_push_struct(view->buffer->arena1, undo_buffer_entry);
+    *entry = (undo_buffer_entry)
+    {
+        .num_carets = view->num_carets,
+        .carets = arena_copy(view->buffer->arena1, view->carets, sizeof(caret) * view->num_carets),
+        .edit = view->buffer->latest_edit
+    };
+    dll_push(view->buffer->undo_buffer_position, entry);
+}
+
 internal void carets_insert_string(rained_view *view, string insert)
 {
     carets_bubble_sort_top_to_bottom(view);
@@ -404,6 +416,7 @@ internal void carets_insert_string(rained_view *view, string insert)
     }
     view->fit_caret = 1;
     view->buffer->is_dirty = 1;
+    push_undo_entry(view);
 }
 
 internal void carets_delete_length(rained_view *view, u32 *lengths)
@@ -434,6 +447,7 @@ internal void carets_delete_length(rained_view *view, u32 *lengths)
     }
     view->fit_caret = 1;
     view->buffer->is_dirty = 1;
+    push_undo_entry(view);
 }
 
 internal void caret_spawn_new_below(rained_view *view)
@@ -468,21 +482,68 @@ internal void caret_spawn_new_above(rained_view *view)
 
 internal void undo(rained_view *view)
 {
-    /*
-    copy carets before
-    for each entry...
-    entry.additive = !entry.additive
-    apply_edit
-    */
+    if(view->buffer->undo_buffer_position)
+    {
+        text_edit *stop_edit = 0;
+        undo_buffer_entry *prior_entry = view->buffer->undo_buffer_position->next;
+    
+        if(prior_entry)
+        {
+            stop_edit = prior_entry->edit;
+            view->num_carets = prior_entry->num_carets;
+            for(u32 i = 0; i < view->num_carets; i++)
+            {
+                view->carets[i] = prior_entry->carets[i];
+            }
+        }
+        else
+        {
+            view->num_carets = 1;
+            view->carets[0] = (caret){0};
+        }
+    
+        text_edit *e = view->buffer->undo_buffer_position->edit;
+        while(e != stop_edit)
+        {
+            e->additive = !e->additive;
+            buffer_apply_edit(view->buffer, e);
+            view->buffer->patch_edits = e;
+            e = e->next;
+        }
+
+        view->buffer->undo_buffer_position = prior_entry;
+    }    
 }
 
 internal void redo(rained_view *view)
 {
-    /*
-    copy carets after
-    for each entry...
-    apply_edit
-    */
+    if(view->buffer->undo_buffer_position)
+    {
+        undo_buffer_entry *next_entry = view->buffer->undo_buffer_position->prev;
+        if(next_entry)
+        {
+            view->num_carets = next_entry->num_carets;
+            for(u32 i = 0; i < view->num_carets; i++)
+            {
+                view->carets[i] = next_entry->carets[i];
+            }
+         
+            text_edit *e = view->buffer->undo_buffer_position->edit->prev;
+            while(1)
+            {
+                e->additive = !e->additive;
+                buffer_apply_edit(view->buffer, e);
+                view->buffer->patch_edits = e->prev;
+                if(e == next_entry->edit)
+                {
+                    break;
+                }
+                e = e->prev;
+            }
+
+            view->buffer->undo_buffer_position = next_entry;
+        }
+    }
 }
 
 internal rained_buffer *open_empty_buffer(rained_state *state)

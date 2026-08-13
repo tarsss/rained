@@ -302,7 +302,11 @@ struct text_edit
 typedef struct undo_buffer_entry undo_buffer_entry;
 struct undo_buffer_entry
 {
-    
+    undo_buffer_entry   *prev;
+    undo_buffer_entry   *next;
+    text_edit           *edit;
+    caret               *carets;
+    u32                 num_carets;
 };
 
 typedef struct rained_buffer rained_buffer;
@@ -321,10 +325,9 @@ struct rained_buffer
     };
 
     arena               *arena1;
-    text_edit           *edits;
+    text_edit           *latest_edit;
     text_edit           *patch_edits;
     text_edit           *schedule_edits;
-    undo_buffer_entry   *undo_buffer_tail;
     undo_buffer_entry   *undo_buffer_position;
     
     b32                 is_dirty;

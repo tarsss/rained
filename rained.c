@@ -1330,6 +1330,85 @@ internal copy_cut_range *carets_get_copy_or_cut_ranges(rained_view *view, arena 
     return res;
 }
 
+internal u32 get_auto_indentation(rained_buffer *buffer, u32 position)
+{
+    u32 p1 = find_line_end(buffer, position);
+    u32 nesting_depth = 0;
+    for(u32 i = 0; i < p1; i++)
+    {
+        switch(buffer->text[i])
+        {
+            case '{': 
+            case '[': 
+            case '(':
+            {
+                if(i >= position)
+                {
+                    return nesting_depth * 4;
+                }
+                nesting_depth++;
+                break;
+            }
+            case '}':
+            case ']':
+            case ')':
+            {
+                nesting_depth = min(nesting_depth - 1, nesting_depth);
+                break;
+            }
+            default:
+            {
+                if(i >= position)
+                {
+                    return nesting_depth * 4;
+                }
+            }
+        }
+    }
+    return nesting_depth * 4;
+}
+
+// todo: patch carets...?
+internal void indent_range(rained_view *view, u32 position, u32 length)
+{
+    u32 p = find_line_start(view->buffer, position);
+    while(1)
+    {
+        u32 num_spaces = 0;
+        u32 i = p;
+        while(view->buffer->text[i] == ' ')
+        {
+            i++;
+            num_spaces++;
+        }
+
+        if(num_spaces)
+        {
+            buffer_apply_edit(view->buffer, buffer_push_delete_edit(view->buffer, p, num_spaces));
+        }
+        
+        u32 indentation = get_auto_indentation(view->buffer, p);
+        if(indentation)
+        {
+            string insert = 
+            {
+                .length = indentation,
+                .p = arena_push(global_state.frame_arena, sizeof(c8) * indentation, 8)
+            };
+            for(u32 i = 0; i < indentation; i++)
+            {
+                insert.p[i] = ' ';
+            }
+            buffer_apply_edit(view->buffer, buffer_push_insert_edit(view->buffer, p, insert));
+        }
+
+        if(!find_line_next(view->buffer, &p) || p > position + length)
+        {
+            break;
+        }
+    }
+}
+
 internal renderer_command *draw(rained_input *input)
 {
     static b32 did_init;
@@ -1547,6 +1626,21 @@ internal renderer_command *draw(rained_input *input)
                 else if(e.code == KEY_DELETE || e.code == (KEY_DELETE | MODIFIER_CTRL))
                 {
                     carets_delete(view, 1, e.code & MODIFIER_CTRL);
+                }
+                else if(e.code == ('I' | MODIFIER_CTRL))
+                {
+                    for(u32 i = 0; i < view->num_carets; i++)
+                    {
+                        caret c = view->carets[i];
+                        u32 range_start = c.position;
+                        u32 range_length = 0;
+                        if(c.selection_active)
+                        {
+                            range_start = min(c.position, c.selection_pos);
+                            range_length = max(c.position, c.selection_pos) - range_start;
+                        }
+                        indent_range(view, range_start, range_length);
+                    }
                 }
             }
         }

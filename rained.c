@@ -774,9 +774,9 @@ internal u32 find_line_start(rained_buffer *buffer, u32 p)
 internal u32 find_line_end(rained_buffer *buffer, u32 line_start)
 {
     u32 p = line_start;
-    while(1)
+    while(p < buffer->text_size)
     {
-        if(p == buffer->text_size - 1 || buffer->text[p] == '\r' || buffer->text[p] == '\n')
+        if(buffer->text[p] == '\r' || buffer->text[p] == '\n')
         {
             break;
         }
@@ -1409,6 +1409,22 @@ internal void indent_range(rained_view *view, u32 position, u32 length)
     }
 }
 
+internal void carets_indent(rained_view *view)
+{
+    for(u32 i = 0; i < view->num_carets; i++)
+    {
+        caret c = view->carets[i];
+        u32 range_start = c.position;
+        u32 range_length = 0;
+        if(c.selection_active)
+        {
+            range_start = min(c.position, c.selection_pos);
+            range_length = max(c.position, c.selection_pos) - range_start;
+        }
+        indent_range(view, range_start, range_length);
+    }
+}
+
 internal renderer_command *draw(rained_input *input)
 {
     static b32 did_init;
@@ -1629,18 +1645,7 @@ internal renderer_command *draw(rained_input *input)
                 }
                 else if(e.code == ('I' | MODIFIER_CTRL))
                 {
-                    for(u32 i = 0; i < view->num_carets; i++)
-                    {
-                        caret c = view->carets[i];
-                        u32 range_start = c.position;
-                        u32 range_length = 0;
-                        if(c.selection_active)
-                        {
-                            range_start = min(c.position, c.selection_pos);
-                            range_length = max(c.position, c.selection_pos) - range_start;
-                        }
-                        indent_range(view, range_start, range_length);
-                    }
+                    carets_indent(view);
                 }
             }
         }
@@ -1665,6 +1670,7 @@ internal renderer_command *draw(rained_input *input)
                     .length = 2
                 };
                 carets_insert_or_replace_selection_with_string(view, insert);
+                carets_indent(view);
             }
         }
 

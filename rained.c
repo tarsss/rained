@@ -858,6 +858,54 @@ internal void caret_move_up_chopped(rained_view *view, caret *caret)
     caret_step_step_line_columns(view->buffer, caret, min(caret->wish_column, list.lines[list.count - 1].length));
 }
 
+typedef struct lister_item lister_item;
+struct lister_item
+{
+    lister_item     *next;
+    u32             index;
+    string          text;
+
+};
+
+internal lister_item *lister_push_items(rained_view *view, string filter, arena *arena)
+{
+    lister_item *first = 0, *last = 0;
+
+    /*
+    for(u32 i = 0; i < 16; i++)
+    {
+        lister_item *e = arena_push_struct(arena, lister_item);
+        *e = (lister_item)
+        {
+            .index = 0,
+            .text = string_push_format(global_state.frame_arena, "item %d", i),
+        };
+        sll_push_queue(first, last, e);
+    }
+    */
+
+    os_file_listing *fl = os_list_files(filter, global_state.frame_arena);
+    while(fl)
+    {
+        lister_item *e = arena_push_struct(arena, lister_item);
+        *e = (lister_item)
+        {
+            .index = 0,
+            .text = fl->name,
+        };
+        sll_push_queue(first, last, e);
+
+        fl = fl->next;
+    }
+
+    return first;
+}
+
+internal lister_item *lister_get_items_for_rendering(rained_view *view)
+{
+    return lister_push_items(view, view->buffer->text_string, global_state.frame_arena);
+}
+
 #define d_color_text                0x00ebdbb2
 #define d_color_bg                  0x00000000
 #define d_color_caret_line          0x001F1F1F
@@ -1022,7 +1070,7 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
         }
     }
 
-    u32 cell_count = view->width_cells * view->height_cells; 
+    u32 cell_count = view->width_cells * view->height_cells;
     cell *cells = arena_push(global_state.frame_arena, cell_count * sizeof(cell), 64);
 
     for(u32 i = 0; i < cell_count; i++)
@@ -1104,7 +1152,7 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
         }
     }
     
-    if(!view->is_a_command_view && view->buffer->path.p)
+    if(view->kind == rained_view_code && view->buffer->path.p)
     {
         PROFILE_BEGIN("tokens");
         highlight_token_array arr = rained_clang_query_tokens_for_file(global_state.clang_state, view->buffer);
@@ -1202,6 +1250,74 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
         }
     });
     PROFILE_END();
+
+    if(view->kind == rained_view_lister)
+    {
+        i32 list_y_offset = -view->y_offset_pixels + 64;
+        u32 item_height = 32;
+
+        u32 i = 0;
+        lister_item *item = lister_get_items_for_rendering(view);
+
+        while(item)
+        {
+            u32 y = ctx->rect.min_y + list_y_offset + i * item_height;
+            push_renderer_command(ctx, (renderer_command)
+            {
+                .kind = RENDERER_COMMAND_RECT,
+                .rect = (rect)
+                {                    
+                    .min_x = ctx->rect.min_x,
+                    .max_x = ctx->rect.max_x,
+                    .min_y = y,
+                    .max_y = y + 2,
+                },
+                .quad.color = d_color_token_comment
+            });
+
+            y += 2;
+
+            cell *text_cells = arena_push(global_state.frame_arena, sizeof(cell) * view->width_cells, 8);
+
+            for(u32 j = 0; j < view->width_cells; j++)
+            {
+                text_cells[j] = (cell)
+                {
+                    .bg_color = d_color_bg,
+                    .text_color = d_color_text,
+                    .atlas_index = 0,
+                };
+
+                if(j < item->text.length)
+                {
+                    text_cells[j].atlas_index = item->text.p[j] - 32;
+                }
+            } 
+
+            push_renderer_command(ctx, (renderer_command)
+            {
+                .kind = RENDERER_COMMAND_CODE_VIEW,
+                .rect = (rect)
+                {                    
+                    .min_x = ctx->rect.min_x,
+                    .max_x = ctx->rect.max_x,
+                    .min_y = y,
+                    .max_y = y + cell_height,
+                },
+                .code_view = 
+                {
+                    .font = global_state.font,
+                    .cells = text_cells,
+                    .num_cells_x = view->width_cells,
+                    .num_cells_y = 1,
+                }
+            });
+
+            item = item->next;
+            i++;
+        }
+    }
+
 }
 
 // todo: there is a bug with big lines.
@@ -1528,11 +1644,11 @@ internal renderer_command *draw(rained_input *input)
                 {
                     // note: listen, i don't know what am do i want to do ui-wise right now. we just open a buffer, and we type some text there, and we do something on enter, okay? and then we don't even free the buffer memory, we just leak the whole thing, i dont give a flying fuck, this is my editor
                     rained_buffer *b = open_empty_buffer(&global_state);
-                    tile_push_view(global_state.focused_tile, b)->is_a_command_view = 1;
+                    tile_push_view(global_state.focused_tile, b)->kind = rained_view_lister;
                 }
                 else if(e.code == KEY_ENTER)
                 {
-                    if(global_state.focused_tile->view->is_a_command_view)
+                    if(global_state.focused_tile->view->kind == rained_view_lister)
                     {
                         rained_view *v = tile_find_view_by_buffer_file_name(global_state.focused_tile, global_state.focused_tile->view->buffer->text_string);
                         if(v)
@@ -1784,7 +1900,7 @@ internal renderer_command *draw(rained_input *input)
                     }
                     else if(e.code == KEY_PAGEDOWN)
                     {
-                    #if 0 
+                    #if 0
                         chopped_line_list l = chop_lines(view->buffer, view->width_cells, caret->position, view->height_cells - 2, -1, global_state.frame_arena);
                         caret->position = l.lines[l.count - 1].pos_in_text;
                         view->fit_caret = 1;

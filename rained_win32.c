@@ -156,6 +156,47 @@ internal void os_close_spall_file(void *spall_file)
     assert(CloseHandle(spall_file));
 }
 
+internal os_file_listing *os_list_files(string path, arena *arena)
+{
+    string filter = 
+    {
+        .length = path.length + 2,
+        .p = arena_copy(arena, path.p, path.length + 2),
+    };
+    filter.p[filter.length - 2] = '*';
+    filter.p[filter.length - 1] = '\0';
+
+    WIN32_FIND_DATAA find_data;
+    HANDLE file_handle = FindFirstFileA(filter.p, &find_data);
+    if(file_handle == INVALID_HANDLE_VALUE)
+    {
+        return 0;
+    }
+    
+    os_file_listing *first = 0, *last = 0;
+    
+    os_file_listing *e = arena_push_struct(arena, os_file_listing);
+    *e = (os_file_listing)
+    {
+        .name = arena_push_cstring(arena, find_data.cFileName)
+    };
+    sll_push_queue(first, last, e);
+
+    while(FindNextFileA(file_handle, &find_data))
+    {
+        os_file_listing *e = arena_push_struct(arena, os_file_listing);
+        *e = (os_file_listing)
+        {
+            .name = arena_push_cstring(arena, find_data.cFileName)
+        };
+        sll_push_queue(first, last, e);
+    }
+
+    FindClose(file_handle);
+
+    return first;
+}
+
 internal void os_toggle_fullscreen()
 {
     // https://devblogs.microsoft.com/oldnewthing/20100412-00/?p=14353

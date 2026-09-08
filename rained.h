@@ -334,6 +334,13 @@ struct rained_buffer
     rained_buffer       *next;
 };
 
+typedef enum
+{
+    rained_view_code,
+    rained_view_lister,
+
+} rained_view_kind;
+
 typedef struct rained_view rained_view;
 struct rained_view
 {
@@ -343,7 +350,7 @@ struct rained_view
     caret               carets[1024];
     u32                 num_carets;
     rained_view         *next;
-    b32                 is_a_command_view; // note: mfgghhhhhhhh? idk.
+    rained_view_kind    kind;
     b32                 fit_caret;
     u32                 width_cells;
     u32                 height_cells;
@@ -366,6 +373,16 @@ internal void os_write_file(char *path, void *stuff, u64 size_bytes);
 internal void *os_create_spall_file();
 internal b32 os_write_spall_file(void *spall_file, void *data, u32 length);
 internal void os_close_spall_file(void *spall_file);
+
+typedef struct os_file_listing os_file_listing;
+struct os_file_listing
+{
+    os_file_listing *next;
+    string          name;
+
+};
+internal os_file_listing *os_list_files(string path, arena *arena);
+
 internal void os_toggle_fullscreen();
 internal string os_clipboard_get(arena *arena);
 internal void os_clipboard_set(string text);
@@ -374,6 +391,7 @@ internal void os_release_font_atlas(font_atlas atlas);
 internal void os_debug_output_string(char *str);
 internal void os_debug_printf(char *format, ...);
 internal void os_create_thread(void (* routine)(void *), void *data, c16 *name);
+
 
 typedef struct
 {
@@ -508,7 +526,7 @@ internal string arena_push_string_terminate(arena *arena, string str)
         .p = arena_copy(arena, str.p, str.length + 1),
     };
     res.p[str.length] = '\0';
-    return str;
+    return res;
 }
 
 internal b32 string_match(string a, string b)
@@ -539,6 +557,20 @@ internal string string_copy(string str, arena *arena)
     {
         .p = arena_copy(arena, str.p, str.length + 1),
         .length = str.length
+    };
+}
+
+internal string string_push_format(arena *arena, char *format, ...)
+{
+    va_list va;
+    va_start(va, format);
+    char *buf = arena_push(arena, 1024, 8); // todo...
+    u32 length = stbsp_vsprintf(buf, format, va);
+    va_end(va);
+    return (string)
+    {
+        .length = length,
+        .p = buf,
     };
 }
 

@@ -226,6 +226,7 @@ typedef struct
     f32         mouse_wheel_delta;
     u32         screen_w, screen_h;
     u64         frame_start;
+    f32         delta_time;
 
 } rained_input;
 
@@ -347,6 +348,7 @@ struct rained_view
     rained_buffer       *buffer;
     u32                 line_index;
     f32                 y_offset_pixels;
+    f32                 y_offset_pixels_intertia;
     caret               carets[1024];
     u32                 num_carets;
     rained_view         *next;

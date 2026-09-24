@@ -15,7 +15,7 @@ fxc -nologo /O3 /WX /Qstrip_reflect /Qstrip_debug /T cs_5_0 /E shader_cs /Fh sha
 
 set warnings=-Wno-incompatible-pointer-types-discards-qualifiers
 set common_compiler_flags=/GS- /Gs9999999 /I %llvm_include_path% %warnings%
-set common_linker_flags=kernel32.lib user32.lib d3d11.lib dxgi.lib dxguid.lib dwrite.lib gdi32.lib shell32.lib %llvm_lib_path%libclang.lib -incremental:no -nodefaultlib -subsystem:windows -STACK:0x100000,0x100000 
+set common_linker_flags=kernel32.lib user32.lib d3d11.lib dxgi.lib dxguid.lib dwrite.lib gdi32.lib shell32.lib hid.lib %llvm_lib_path%libclang.lib -incremental:no -nodefaultlib -subsystem:windows -STACK:0x100000,0x100000 
 
 set debug_compiler_flags=-Zi -DDEBUG
 set debug_linker_flags=-debug:full

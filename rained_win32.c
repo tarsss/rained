@@ -10,6 +10,7 @@
 ; // FUCK OFFFFFFFFFF CLANG
 #include "rained.c"
 
+
 HWND                        window;
 WINDOWPLACEMENT             windowedPlacement;
 HDC                         hdc;
@@ -34,6 +35,16 @@ char                        sprintf_buf[64]; // for sprintf, dumb
 u64                         frame_start;
 u32                         cell_buffer_count;
 DWORD                       thread_context_tls_index;
+
+#define BT_IMPLEMENTATION
+#define BT_USE_ARENAS
+#define BT_ARENA                        arena_t
+#define BT_ARENA_GET_POS(arena)         (arena->used)
+#define BT_ARENA_PUSH(arena, size)      (arena_push_zero(arena, size, 1))
+#define BT_ARENA_POP_TO(arena, pos)     (arena->used = pos)
+
+#include "better_trackpad.h"
+bt_context btc;
 
 internal void os_mem_reserve(u64 size, void **address)
 {
@@ -483,6 +494,27 @@ LRESULT window_callback(HWND window,
     LRESULT result = 0;
     switch (message)
     {
+        case WM_INPUT:
+        {
+            /*
+            UINT dwSize = sizeof(RAWINPUT);
+            static BYTE lpb[sizeof(RAWINPUT)];
+        
+            GetRawInputData((HRAWINPUT)lParam, RID_INPUT, lpb, &dwSize, sizeof(RAWINPUTHEADER));
+        
+            RAWINPUT* raw = (RAWINPUT*)lpb;
+        
+            if (raw->header.dwType == RIM_TYPEHID) 
+            {
+                int last_x = raw->data.mouse.lLastX;
+                int last_y = raw->data.mouse.lLastY;
+            }
+            */
+
+            bt_process_input(&btc, window, wParam, lParam);
+
+            break;
+        }
         case WM_SYSKEYDOWN:
         case WM_SYSKEYUP:
         case WM_KEYUP:
@@ -530,8 +562,14 @@ LRESULT window_callback(HWND window,
         }
         case WM_MOUSEWHEEL:
         {
-            mouse_wheel_delta_accum += (i16)(wParam >> 16);
+            //mouse_wheel_delta_accum += (i16)(wParam >> 16);
 
+            break;
+        }
+        case BT_MSG_GESTURE_PAN:
+        {
+            bt_gesture_pan pan = BT_GESTURE_PAN_LPARAM(lParam);
+            mouse_wheel_delta_accum += pan.move_y;
             break;
         }
         case WM_MOUSEMOVE:
@@ -682,6 +720,13 @@ void __stdcall WinMainCRTStartup()
         hModule,
         0);
     assert(window);
+
+    arena *bta = arena_alloc(mb(1), kb(4));
+    bt_context_desc btcd = 
+    {
+        .hwnd = window,
+    };
+    bt_init(bta, &btc, &btcd);
 
     os_toggle_fullscreen();
     
@@ -895,10 +940,6 @@ void __stdcall WinMainCRTStartup()
         PROFILE_END();
     #endif
         
-        u64 time = os_time_us();
-        prev_frame = time - frame_start;
-        frame_start = time;
-
         mouse_wheel_delta_accum = 0;
         input_queue_count = 0;
 
@@ -915,6 +956,8 @@ void __stdcall WinMainCRTStartup()
         }
         PROFILE_END();
 
+        bt_passive_update(&btc, window);
+
         mouse_wheel_delta = (f32) mouse_wheel_delta_accum / 120.0f * 32.0f;
 
         if(screen_w != new_screen_w || screen_h != new_screen_h)
@@ -923,6 +966,10 @@ void __stdcall WinMainCRTStartup()
             screen_h = new_screen_h;
             resize_swapchain();
         }
+
+        u64 time = os_time_us();
+        prev_frame = time - frame_start;
+        frame_start = time;
 
         rained_input in = 
         {
@@ -937,6 +984,7 @@ void __stdcall WinMainCRTStartup()
             .mmb = mmb,
             .screen_h = screen_h,
             .screen_w = screen_w,
+            .delta_time = (f32)prev_frame / 1000000.0f,
         };
         
         renderer_command *cmd = draw(&in);

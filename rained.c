@@ -1333,12 +1333,39 @@ internal u32 tile_screen_pos_to_view_buffer_text_pos(rained_tile *tile, i32 scre
     return line.pos_in_text + min(line.length - 1, pos_column);
 }
 
-internal void draw_tile(draw_context *ctx, rained_tile *tile, b32 is_focused, f32 scroll)
+internal f32 f32_exp(f32 x)
+{
+    f32 sum = 1.0f;
+    f32 term = 1.0f;
+    for (u32 i = 1; i < 11; ++i) {
+        term *= x / (f32)i;
+        sum += term;
+    }
+    return sum;
+}
+
+internal f32 f32_exp_decay(f32 a, f32 b, f32 decay, f32 dt)
+{
+    return b + (a - b) * f32_exp(-decay * dt);
+}
+
+internal void draw_tile(draw_context *ctx, rained_tile *tile, b32 is_focused, f32 scroll_input, f32 delta_time)
 {
     if(tile->view)
     {
         ctx->rect = tile->rect;
-        draw_view(ctx, tile->view, scroll, is_focused);
+        f32 scroll_amount;
+        if(scroll_input)
+        {
+            tile->view->y_offset_pixels_intertia = scroll_input / delta_time;
+            scroll_amount = scroll_input;
+        }
+        else
+        {
+            tile->view->y_offset_pixels_intertia = f32_exp_decay(tile->view->y_offset_pixels_intertia, 0.0f, 1.47f, delta_time);
+            scroll_amount = tile->view->y_offset_pixels_intertia * delta_time;
+        }
+        draw_view(ctx, tile->view, scroll_amount, is_focused);
     }
 }
 
@@ -1977,7 +2004,7 @@ internal renderer_command *draw(rained_input *input)
     rained_tile *t = global_state.tile_left;
     while(t)
     {
-        draw_tile(&ctx, t, global_state.focused_tile == t, rect_contains_point(t->rect, input->mouse_x, input->mouse_y) ? input->mouse_wheel_delta : 0.0f);
+        draw_tile(&ctx, t, global_state.focused_tile == t, rect_contains_point(t->rect, input->mouse_x, input->mouse_y) ? input->mouse_wheel_delta : 0.0f, input->delta_time);
         t = t->next;
     }
 

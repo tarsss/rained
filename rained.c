@@ -1349,22 +1349,28 @@ internal f32 f32_exp_decay(f32 a, f32 b, f32 decay, f32 dt)
     return b + (a - b) * f32_exp(-decay * dt);
 }
 
-internal void draw_tile(draw_context *ctx, rained_tile *tile, b32 is_focused, f32 scroll_input, f32 delta_time)
+internal void draw_tile(draw_context *ctx, rained_tile *tile, b32 is_focused, b32 panning, i32 pan_delta, f32 pan_velocity, f32 delta_time)
 {
     if(tile->view)
     {
         ctx->rect = tile->rect;
-        f32 scroll_amount;
-        if(scroll_input)
+
+        f32 scroll_amount = 0.0f;
+
+        if(panning)
         {
-            tile->view->y_offset_pixels_intertia = scroll_input / delta_time;
-            scroll_amount = scroll_input;
+            tile->view->y_offset_pixels_intertia = pan_velocity;
+            scroll_amount = pan_delta;
         }
         else
         {
-            tile->view->y_offset_pixels_intertia = f32_exp_decay(tile->view->y_offset_pixels_intertia, 0.0f, 1.47f, delta_time);
-            scroll_amount = tile->view->y_offset_pixels_intertia * delta_time;
+            if(tile->view->y_offset_pixels_intertia)
+            {
+                tile->view->y_offset_pixels_intertia = f32_exp_decay(tile->view->y_offset_pixels_intertia, 0.0f, 1.47f, delta_time);
+                scroll_amount = tile->view->y_offset_pixels_intertia * delta_time;
+            }
         }
+
         draw_view(ctx, tile->view, scroll_amount, is_focused);
     }
 }
@@ -1606,6 +1612,10 @@ internal renderer_command *draw(rained_input *input)
         global_state.font = os_make_font_atlas(global_state.font_size, global_state.frame_arena);
     }
     PROFILE_END();
+
+    b32 panning = 0;
+    i32 pan_delta = 0;
+    f32 pan_velocity = 0.0f;
     
     rained_view *view = global_state.focused_tile->view;
 
@@ -1941,6 +1951,47 @@ internal renderer_command *draw(rained_input *input)
             }
         }
 
+        if(e.type == INPUT_EVENT_TOUCHPAD_SCAN)
+        {
+            // todo: put scans into a buffer big enough to fit maybe like latest 50ms, process all at once, average velocity for intertia
+            
+            if(e.touchpad_scan.count_down >= 2)
+            {
+                static touchpad_scan prev_pan_scan;
+
+                if(panning)
+                {
+                    for(u32 i = 0; i < RAINED_TOUCHPAD_MAX_CONTACTS; i++)
+                    {
+                        touchpad_contact c = e.touchpad_scan.contacts[i];
+    
+                        if(c.is_down)
+                        {
+                            touchpad_contact c0 = prev_pan_scan.contacts[i];
+                            
+                            if(c0.is_down)
+                            {
+                                pan_delta += c.y - c0.y;
+                            }
+                        }
+                    }
+
+                    pan_delta /= (i32)e.touchpad_scan.count_down;
+                    pan_velocity = pan_delta / 0.0072f; // todo
+                }
+                else
+                {
+                    panning = 1;
+                }
+
+                prev_pan_scan = e.touchpad_scan;
+            }
+            else
+            {
+                panning = 0;
+            }
+        }
+
         merge_overlapping_carets_in_a_slow_way(view);
     }
 
@@ -2004,7 +2055,8 @@ internal renderer_command *draw(rained_input *input)
     rained_tile *t = global_state.tile_left;
     while(t)
     {
-        draw_tile(&ctx, t, global_state.focused_tile == t, rect_contains_point(t->rect, input->mouse_x, input->mouse_y) ? input->mouse_wheel_delta : 0.0f, input->delta_time);
+        b32 hovered = rect_contains_point(t->rect, input->mouse_x, input->mouse_y);
+        draw_tile(&ctx, t, global_state.focused_tile == t, panning & hovered, pan_delta, pan_velocity, input->delta_time);
         t = t->next;
     }
 
@@ -2021,6 +2073,22 @@ internal renderer_command *draw(rained_input *input)
         },
         .quad.color = 0x001F1F1F
     });
+
+    /*
+    for(u32 i = 0; i < input->num_touchpad_contacts; i++)
+    {
+        touchpad_contact c = input->touchpad_contacts[i];
+        push_renderer_command(&ctx, (renderer_command)
+        {
+            .kind = RENDERER_COMMAND_RECT,
+            .quad.color = 0xFFFF0000,
+            .rect.min_x = c.x / 1.4f - 10,
+            .rect.max_x = c.x / 1.4f + 10,
+            .rect.min_y = c.y / 1.4f - 10,
+            .rect.max_y = c.y / 1.4f + 10,
+        });
+    }
+    */
 
     return ctx.commands_first;
 }

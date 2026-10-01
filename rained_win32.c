@@ -7,6 +7,9 @@
 #include <debugapi.h>
 #include "shader.h"
 #include "cdwrite.h"
+#include <hidclass.h>
+#include <hidsdi.h>
+#include <hidpi.h>
 ; // FUCK OFFFFFFFFFF CLANG
 #include "rained.c"
 
@@ -31,20 +34,16 @@ i16                         mouse_wheel_delta_accum;
 f32                         mouse_wheel_delta;
 i32                         mouse_x, mouse_y;
 b32                         lmb, rmb, mmb;
-char                        sprintf_buf[64]; // for sprintf, dumb
+char                        sprintf_buf[1024]; // for sprintf, dumb
 u64                         frame_start;
 u32                         cell_buffer_count;
 DWORD                       thread_context_tls_index;
-
-#define BT_IMPLEMENTATION
-#define BT_USE_ARENAS
-#define BT_ARENA                        arena_t
-#define BT_ARENA_GET_POS(arena)         (arena->used)
-#define BT_ARENA_PUSH(arena, size)      (arena_push_zero(arena, size, 1))
-#define BT_ARENA_POP_TO(arena, pos)     (arena->used = pos)
-
-#include "better_trackpad.h"
-bt_context btc;
+i16                         ptp_link_collections[RAINED_TOUCHPAD_MAX_CONTACTS];
+u16                         ptp_prev_ids[RAINED_TOUCHPAD_MAX_CONTACTS];
+HANDLE                      ptp_device_handle;
+PHIDP_PREPARSED_DATA        ptp_ppd;
+u32                         ptp_rawinput_size;
+RAWINPUT                    *ptp_rawinput;
 
 internal void os_mem_reserve(u64 size, void **address)
 {
@@ -481,6 +480,154 @@ internal void os_create_thread(void (* routine)(void *), void *data, c16 *name)
     ResumeThread(handle);
 }
 
+internal void win32_ptp_init(arena *arena)
+{
+    u32 num_devices = 0;
+    GetRawInputDeviceList(NULL, &num_devices, sizeof(RAWINPUTDEVICELIST));
+    RAWINPUTDEVICELIST *devices = arena_push(arena, num_devices * sizeof(RAWINPUTDEVICELIST), 8);
+    GetRawInputDeviceList(devices, &num_devices, sizeof(RAWINPUTDEVICELIST));
+
+    for (u32 i = 0; i < num_devices; i++) 
+    {
+        if (devices[i].dwType != RIM_TYPEHID) { continue; }
+
+        u32 device_info_size = sizeof(RID_DEVICE_INFO);
+        RID_DEVICE_INFO device_info = { 0 };
+        GetRawInputDeviceInfo(devices[i].hDevice, RIDI_DEVICEINFO, &device_info, &device_info_size);
+
+        if (device_info.dwType != RIM_TYPEHID) { continue; }
+
+        // Usage Page should be 0x0d (Digitizers)
+        // Usage should be 0x05 (Touch Pads)
+        if (device_info.hid.usUsagePage == 0x0d && device_info.hid.usUsage == 0x05) 
+        {
+            ptp_device_handle = devices[i].hDevice;
+            break;
+        }
+    }
+
+    if(!ptp_device_handle)
+    {
+        return;
+    }
+
+    RAWINPUTDEVICE rid = 
+    {
+        .usUsagePage = 0x0d,
+        .usUsage = 0x05,
+        .hwndTarget = window
+    };
+
+    RegisterRawInputDevices(&rid, 1, sizeof(RAWINPUTDEVICE));
+
+    u32 ppd_size = 0;
+    GetRawInputDeviceInfo(ptp_device_handle, RIDI_PREPARSEDDATA, NULL, &ppd_size);
+    
+    ptp_ppd = (PHIDP_PREPARSED_DATA)arena_push(arena, ppd_size, 8);
+
+    GetRawInputDeviceInfo(ptp_device_handle, RIDI_PREPARSEDDATA, ptp_ppd, &ppd_size);
+
+    HIDP_CAPS caps = { 0 };
+    HidP_GetCaps(ptp_ppd, &caps);
+
+    ptp_rawinput_size = sizeof(RAWINPUTHEADER) + sizeof(RAWHID) + caps.InputReportByteLength;
+    ptp_rawinput = arena_push(arena, ptp_rawinput_size, 8);
+    
+    u16 num_value_caps = caps.NumberInputValueCaps;
+    HIDP_VALUE_CAPS *value_caps = arena_push(arena, sizeof(HIDP_VALUE_CAPS) * num_value_caps, 8);
+    HidP_GetValueCaps(HidP_Input, value_caps, &num_value_caps, ptp_ppd);
+
+    // note: value seems to be equal index each time
+    u32 link_index = 0;
+    for (u32 i = 0; i < num_value_caps; i++) 
+    {
+        if (value_caps[i].UsagePage == 0x0d) 
+        {
+            if (value_caps[i].NotRange.Usage == 0x51) 
+            {
+                ptp_link_collections[link_index] = value_caps[i].LinkCollection;
+                link_index++;
+            }
+        }
+    }
+}
+
+internal touchpad_scan win32_parse_ptp_scan(RAWINPUT *ri)
+{
+    touchpad_scan scan = { 0 };
+
+    PCHAR report = (PCHAR)ri->data.hid.bRawData;
+    u32 report_length = ri->data.hid.dwSizeHid;
+
+    ULONG scan_time = 0, contact_count = 0;
+    HidP_GetUsageValue(HidP_Input, 0x0d, 0, 0x56, &scan_time, ptp_ppd, report, report_length);
+    HidP_GetUsageValue(HidP_Input, 0x0d, 0, 0x54, &contact_count, ptp_ppd, report, report_length);
+
+    u32 num_contacts_down = 0;
+    u16 ids[RAINED_TOUCHPAD_MAX_CONTACTS] = { 0 };
+
+    for(u32 i = 0; i < contact_count; i++)
+    {   
+        u16 lc = ptp_link_collections[i];
+        ULONG usage_count = 16;
+        USAGE usages[16];
+        HidP_GetUsages(HidP_Input, 0x0d, lc, usages, &usage_count, ptp_ppd, report, report_length);
+
+        for(u32 j = 0; j < usage_count; j++)
+        {
+            if(usages[j] == 0x42) // tip == 1
+            {
+                ULONG id = 0, x = 0, y = 0;
+                HidP_GetUsageValue(HidP_Input, 0x0d, lc, 0x51, &id, ptp_ppd, report, report_length);
+                HidP_GetUsageValue(HidP_Input, 0x01, lc, 0x30, &x, ptp_ppd, report, report_length);
+                HidP_GetUsageValue(HidP_Input, 0x01, lc, 0x31, &y, ptp_ppd, report, report_length);
+            
+                u32 contact_index = i;
+                ids[i] = id;
+
+                for(u32 k = 0; k < RAINED_TOUCHPAD_MAX_CONTACTS; k++)
+                {
+                    if(id == ptp_prev_ids[k])
+                    {
+                        contact_index = k;
+                        break;
+                    }
+                }
+
+                scan.contacts[contact_index] = (touchpad_contact)
+                {
+                    .is_down = 1,
+                    .x = x,
+                    .y = y,
+                };
+
+                scan.count_down++;
+
+                break;
+            }
+        }
+    }
+
+    for(u32 i = 0; i < RAINED_TOUCHPAD_MAX_CONTACTS; i++)
+    {
+        ptp_prev_ids[i] = ids[i];
+    }
+
+    os_debug_printf("ptp scan; contacts:\n");
+    os_debug_printf("{\n");
+    for(u32 i = 0; i < RAINED_TOUCHPAD_MAX_CONTACTS; i++)
+    {
+        touchpad_contact c = scan.contacts[i];
+        if(c.is_down)
+        {
+            os_debug_printf("    contact %d; x: %d; y: %d\n", i, c.x, c.y);
+        }
+    }
+    os_debug_printf("}\n");
+
+    return scan;
+}
+
 static input_event input_queue[128];
 static u32         input_queue_count;
 
@@ -496,22 +643,25 @@ LRESULT window_callback(HWND window,
     {
         case WM_INPUT:
         {
-            /*
-            UINT dwSize = sizeof(RAWINPUT);
-            static BYTE lpb[sizeof(RAWINPUT)];
-        
-            GetRawInputData((HRAWINPUT)lParam, RID_INPUT, lpb, &dwSize, sizeof(RAWINPUTHEADER));
-        
-            RAWINPUT* raw = (RAWINPUT*)lpb;
-        
-            if (raw->header.dwType == RIM_TYPEHID) 
-            {
-                int last_x = raw->data.mouse.lLastX;
-                int last_y = raw->data.mouse.lLastY;
-            }
-            */
+            RAWINPUTHEADER header = { 0 };
+            u32 size = sizeof(RAWINPUTHEADER);
+            GetRawInputData((HRAWINPUT)lParam, RID_HEADER, &header, &size, sizeof(RAWINPUTHEADER));
 
-            bt_process_input(&btc, window, wParam, lParam);
+            if(header.hDevice == ptp_device_handle)
+            {
+                if(header.dwSize <= ptp_rawinput_size)
+                {
+                    size = ptp_rawinput_size;
+                    GetRawInputData((HRAWINPUT)lParam, RID_INPUT, ptp_rawinput, &size, sizeof(RAWINPUTHEADER));
+                    touchpad_scan scan = win32_parse_ptp_scan(ptp_rawinput);
+                    input_queue[input_queue_count] = (input_event)
+                    {
+                        .type = INPUT_EVENT_TOUCHPAD_SCAN,
+                        .touchpad_scan = scan
+                    };
+                    input_queue_count++;
+                }
+            }
 
             break;
         }
@@ -560,18 +710,14 @@ LRESULT window_callback(HWND window,
             input_queue_count++;
             break;
         }
+        /*
         case WM_MOUSEWHEEL:
         {
-            //mouse_wheel_delta_accum += (i16)(wParam >> 16);
+            mouse_wheel_delta_accum += (i16)(wParam >> 16);
 
             break;
         }
-        case BT_MSG_GESTURE_PAN:
-        {
-            bt_gesture_pan pan = BT_GESTURE_PAN_LPARAM(lParam);
-            mouse_wheel_delta_accum += pan.move_y;
-            break;
-        }
+        */
         case WM_MOUSEMOVE:
         {
             mouse_x = LOWORD(lParam);
@@ -720,13 +866,10 @@ void __stdcall WinMainCRTStartup()
         hModule,
         0);
     assert(window);
+    
+    arena *scratch = arena_alloc(gb(1), mb(1));
 
-    arena *bta = arena_alloc(mb(1), kb(4));
-    bt_context_desc btcd = 
-    {
-        .hwnd = window,
-    };
-    bt_init(bta, &btc, &btcd);
+    win32_ptp_init(scratch);
 
     os_toggle_fullscreen();
     
@@ -870,10 +1013,6 @@ void __stdcall WinMainCRTStartup()
 
     ID3D11DeviceContext_CSSetShader(device_context, shader, 0, 0);
 
-    arena_t *scratch = arena_alloc(gb(1), mb(1));
-
-    arena_reset(scratch);
-
     dwrite_init();
 
     ID3D11SamplerState *sampler_state;
@@ -956,8 +1095,6 @@ void __stdcall WinMainCRTStartup()
         }
         PROFILE_END();
 
-        bt_passive_update(&btc, window);
-
         mouse_wheel_delta = (f32) mouse_wheel_delta_accum / 120.0f * 32.0f;
 
         if(screen_w != new_screen_w || screen_h != new_screen_h)
@@ -976,7 +1113,6 @@ void __stdcall WinMainCRTStartup()
             .frame_start = frame_start,
             .input_queue = input_queue,
             .input_queue_count = input_queue_count,
-            .mouse_wheel_delta = mouse_wheel_delta,
             .mouse_x = mouse_x,
             .mouse_y = mouse_y,
             .lmb = lmb,
@@ -986,7 +1122,7 @@ void __stdcall WinMainCRTStartup()
             .screen_w = screen_w,
             .delta_time = (f32)prev_frame / 1000000.0f,
         };
-        
+
         renderer_command *cmd = draw(&in);
         PROFILE_BEGIN("render");
 
@@ -1061,7 +1197,8 @@ void __stdcall WinMainCRTStartup()
         ////////////////////////////////////////////////////////////////////////////////
 
         PROFILE_BEGIN("present");
-        hr = IDXGISwapChain1_Present(swapchain, 0, DXGI_PRESENT_ALLOW_TEARING);
+        //hr = IDXGISwapChain1_Present(swapchain, 0, DXGI_PRESENT_ALLOW_TEARING);
+        hr = IDXGISwapChain1_Present(swapchain, 1, 0);
         assert_hr(hr);
 
         ID3D11DeviceContext_CSSetUnorderedAccessViews(device_context, 0, 1, &uav, 0);

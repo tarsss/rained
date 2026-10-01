@@ -1,7 +1,7 @@
 #ifndef RAINED_H
 #define RAINED_H
 
-#define SPALL_ENABLED
+//#define SPALL_ENABLED
 
 #define STB_SPRINTF_IMPLEMENTATION
 #include "stb_sprintf.h"
@@ -68,7 +68,6 @@ typedef int32_t     b32;
 typedef u8          c8;
 typedef u16         c16;
 
-
 #define kb(n) ((u64)n << 10)
 #define mb(n) ((u64)n << 20)
 #define gb(n) ((u64)n << 30)
@@ -101,6 +100,7 @@ typedef enum INPUT_EVENT
     INPUT_EVENT_KEY,
     INPUT_EVENT_TEXT,
     INPUT_EVENT_MOUSE_BUTTON,
+    INPUT_EVENT_TOUCHPAD_SCAN
 
 } INPUT_EVENT;
 
@@ -158,6 +158,23 @@ typedef struct
 
 typedef struct
 {
+    b8                  is_down;
+    i32                 x;
+    i32                 y;
+
+} touchpad_contact;
+
+#define RAINED_TOUCHPAD_MAX_CONTACTS 5
+
+typedef struct
+{
+    u32                 count_down;
+    touchpad_contact    contacts[RAINED_TOUCHPAD_MAX_CONTACTS];
+
+} touchpad_scan;
+
+typedef struct
+{
     INPUT_EVENT     type;
     union
     {
@@ -175,6 +192,7 @@ typedef struct
             mouse_button_event mmb;
             u32 x, y;
         };
+        touchpad_scan touchpad_scan;
     };
 
 } input_event;
@@ -219,14 +237,13 @@ typedef struct
 
 typedef struct
 {
-    input_event *input_queue;
-    u32         input_queue_count;
-    i32         mouse_x, mouse_y;
-    b8          lmb, rmb, mmb;
-    f32         mouse_wheel_delta;
-    u32         screen_w, screen_h;
-    u64         frame_start;
-    f32         delta_time;
+    input_event         *input_queue;
+    u32                 input_queue_count;
+    i32                 mouse_x, mouse_y;
+    b8                  lmb, rmb, mmb;
+    u32                 screen_w, screen_h;
+    u64                 frame_start;
+    f32                 delta_time;
 
 } rained_input;
 

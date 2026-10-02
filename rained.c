@@ -1,5 +1,12 @@
 #include "rained.h"
 
+typedef struct
+{
+    u32 delta_time_us;
+    i32 delta;
+
+} pan_history;
+
 typedef struct rained_clang_state rained_clang_state;
 
 typedef struct
@@ -15,6 +22,11 @@ typedef struct
     u32                 font_size;
     font_atlas          font;
     b32                 reparse_pending;
+    b32                 panning;
+    f32                 pan_inertia;
+    pan_history         pan_history[128];
+    u32                 pan_history_position;
+    u32                 pan_history_count;
 
 } rained_state;
 
@@ -1349,17 +1361,17 @@ internal f32 f32_exp_decay(f32 a, f32 b, f32 decay, f32 dt)
     return b + (a - b) * f32_exp(-decay * dt);
 }
 
-internal void draw_tile(draw_context *ctx, rained_tile *tile, b32 is_focused, b32 panning, i32 pan_delta, f32 pan_velocity, f32 delta_time)
+internal void draw_tile(draw_context *ctx, rained_tile *tile, b32 is_focused, b32 panning, i32 pan_delta, f32 pan_inertia, f32 delta_time)
 {
     if(tile->view)
     {
         ctx->rect = tile->rect;
 
         f32 scroll_amount = 0.0f;
-
+        
         if(panning)
         {
-            tile->view->y_offset_pixels_intertia = pan_velocity;
+            tile->view->y_offset_pixels_intertia = pan_inertia;
             scroll_amount = pan_delta;
         }
         else
@@ -1613,9 +1625,7 @@ internal renderer_command *draw(rained_input *input)
     }
     PROFILE_END();
 
-    b32 panning = 0;
     i32 pan_delta = 0;
-    f32 pan_velocity = 0.0f;
     
     rained_view *view = global_state.focused_tile->view;
 
@@ -1953,13 +1963,11 @@ internal renderer_command *draw(rained_input *input)
 
         if(e.type == INPUT_EVENT_TOUCHPAD_SCAN)
         {
-            // todo: put scans into a buffer big enough to fit maybe like latest 50ms, process all at once, average velocity for intertia
-            
+            static touchpad_scan prev_scan;
+
             if(e.touchpad_scan.count_down >= 2)
             {
-                static touchpad_scan prev_pan_scan;
-
-                if(panning)
+                if(global_state.panning)
                 {
                     for(u32 i = 0; i < RAINED_TOUCHPAD_MAX_CONTACTS; i++)
                     {
@@ -1967,7 +1975,7 @@ internal renderer_command *draw(rained_input *input)
     
                         if(c.is_down)
                         {
-                            touchpad_contact c0 = prev_pan_scan.contacts[i];
+                            touchpad_contact c0 = prev_scan.contacts[i];
                             
                             if(c0.is_down)
                             {
@@ -1977,19 +1985,44 @@ internal renderer_command *draw(rained_input *input)
                     }
 
                     pan_delta /= (i32)e.touchpad_scan.count_down;
-                    pan_velocity = pan_delta / 0.0072f; // todo
+
+                    global_state.pan_history[global_state.pan_history_position] = (pan_history)
+                    {
+                        .delta_time_us = e.touchpad_scan.delta_time_us,
+                        .delta = pan_delta    
+                    };
+                    global_state.pan_history_position++;
+                    global_state.pan_history_position %= 127;
+                    global_state.pan_history_count = min(global_state.pan_history_count + 1, 128);
                 }
                 else
                 {
-                    panning = 1;
+                    global_state.panning = 1;
+                    global_state.pan_inertia = 0;
+                    global_state.pan_history_position = 0;
+                    global_state.pan_history_count = 0;
+                }
+            }
+            else if(global_state.panning)
+            {
+                global_state.panning = 0;
+
+                u32 time_us = 0;
+                i32 delta = 0;
+                u32 idx = global_state.pan_history_position;
+                for(u32 i = 0; i < global_state.pan_history_count - 1; i++)
+                {
+                    pan_history h = global_state.pan_history[idx];
+                    time_us += h.delta_time_us;
+                    delta += h.delta;
+                    idx--;
+                    idx = min(idx, 127);
                 }
 
-                prev_pan_scan = e.touchpad_scan;
+                global_state.pan_inertia = (f32)delta / time_us * 1000000.0f;
             }
-            else
-            {
-                panning = 0;
-            }
+
+            prev_scan = e.touchpad_scan;
         }
 
         merge_overlapping_carets_in_a_slow_way(view);
@@ -2056,7 +2089,7 @@ internal renderer_command *draw(rained_input *input)
     while(t)
     {
         b32 hovered = rect_contains_point(t->rect, input->mouse_x, input->mouse_y);
-        draw_tile(&ctx, t, global_state.focused_tile == t, panning & hovered, pan_delta, pan_velocity, input->delta_time);
+        draw_tile(&ctx, t, global_state.focused_tile == t, global_state.panning & hovered, pan_delta, global_state.pan_inertia, input->delta_time);
         t = t->next;
     }
 

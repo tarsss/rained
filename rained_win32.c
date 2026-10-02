@@ -13,7 +13,6 @@
 ; // FUCK OFFFFFFFFFF CLANG
 #include "rained.c"
 
-
 HWND                        window;
 WINDOWPLACEMENT             windowedPlacement;
 HDC                         hdc;
@@ -40,6 +39,7 @@ u32                         cell_buffer_count;
 DWORD                       thread_context_tls_index;
 i16                         ptp_link_collections[RAINED_TOUCHPAD_MAX_CONTACTS];
 u16                         ptp_prev_ids[RAINED_TOUCHPAD_MAX_CONTACTS];
+u16                         ptp_prev_scan_time;
 HANDLE                      ptp_device_handle;
 PHIDP_PREPARSED_DATA        ptp_ppd;
 u32                         ptp_rawinput_size;
@@ -562,7 +562,14 @@ internal touchpad_scan win32_parse_ptp_scan(RAWINPUT *ri)
     ULONG scan_time = 0, contact_count = 0;
     HidP_GetUsageValue(HidP_Input, 0x0d, 0, 0x56, &scan_time, ptp_ppd, report, report_length);
     HidP_GetUsageValue(HidP_Input, 0x0d, 0, 0x54, &contact_count, ptp_ppd, report, report_length);
-
+    
+    if(ptp_prev_scan_time)
+    {
+        u16 d = (u16)scan_time - ptp_prev_scan_time;
+        scan.delta_time_us = d * 100;
+    }
+    ptp_prev_scan_time = scan_time;
+    
     u32 num_contacts_down = 0;
     u16 ids[RAINED_TOUCHPAD_MAX_CONTACTS] = { 0 };
 
@@ -572,6 +579,16 @@ internal touchpad_scan win32_parse_ptp_scan(RAWINPUT *ri)
         ULONG usage_count = 16;
         USAGE usages[16];
         HidP_GetUsages(HidP_Input, 0x0d, lc, usages, &usage_count, ptp_ppd, report, report_length);
+
+        // todo: this fucking thing is too confident. sometimes it would report contacts for one additional scan after finger lift, reporting the same position, obviously not true... maybe cull contact if prev velocity big enough?
+        b8 confidence = 0;
+        for(u32 j = 0; j < usage_count; j++)
+        {
+            if(usages[j] == 0x47)
+            {
+                confidence = 1;
+            }
+        }
 
         for(u32 j = 0; j < usage_count; j++)
         {
@@ -613,7 +630,7 @@ internal touchpad_scan win32_parse_ptp_scan(RAWINPUT *ri)
         ptp_prev_ids[i] = ids[i];
     }
 
-    os_debug_printf("ptp scan; contacts:\n");
+    os_debug_printf("ptp scan; dt: %dus\n", scan.delta_time_us);
     os_debug_printf("{\n");
     for(u32 i = 0; i < RAINED_TOUCHPAD_MAX_CONTACTS; i++)
     {
@@ -1197,8 +1214,8 @@ void __stdcall WinMainCRTStartup()
         ////////////////////////////////////////////////////////////////////////////////
 
         PROFILE_BEGIN("present");
-        //hr = IDXGISwapChain1_Present(swapchain, 0, DXGI_PRESENT_ALLOW_TEARING);
-        hr = IDXGISwapChain1_Present(swapchain, 1, 0);
+        hr = IDXGISwapChain1_Present(swapchain, 0, DXGI_PRESENT_ALLOW_TEARING);
+        //hr = IDXGISwapChain1_Present(swapchain, 1, 0);
         assert_hr(hr);
 
         ID3D11DeviceContext_CSSetUnorderedAccessViews(device_context, 0, 1, &uav, 0);

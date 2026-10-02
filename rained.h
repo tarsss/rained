@@ -1,7 +1,7 @@
 #ifndef RAINED_H
 #define RAINED_H
 
-//#define SPALL_ENABLED
+#define SPALL_ENABLED
 
 #define STB_SPRINTF_IMPLEMENTATION
 #include "stb_sprintf.h"
@@ -168,6 +168,7 @@ typedef struct
 
 typedef struct
 {
+    u32                 delta_time_us;
     u32                 count_down;
     touchpad_contact    contacts[RAINED_TOUCHPAD_MAX_CONTACTS];
 

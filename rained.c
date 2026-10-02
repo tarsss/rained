@@ -1361,25 +1361,33 @@ internal f32 f32_exp_decay(f32 a, f32 b, f32 decay, f32 dt)
     return b + (a - b) * f32_exp(-decay * dt);
 }
 
-internal void draw_tile(draw_context *ctx, rained_tile *tile, b32 is_focused, b32 panning, i32 pan_delta, f32 pan_inertia, f32 delta_time)
+internal void draw_tile(draw_context *ctx, rained_tile *tile, b32 is_focused, b32 is_hovered, rained_input *input)
 {
     if(tile->view)
     {
         ctx->rect = tile->rect;
 
-        f32 scroll_amount = 0.0f;
-        
-        if(panning)
+        f32 scroll_amount = 0;
+
+        if(is_hovered)
         {
-            tile->view->y_offset_pixels_intertia = pan_inertia;
-            scroll_amount = pan_delta;
+            if(input->touchpad_set_inertia)
+            {
+                tile->view->y_offset_pixels_intertia = input->touchpad_inertia;
+            }
+    
+            if(input->touchpad_panning)
+            {
+                scroll_amount = input->touchpad_pan_delta;
+            }
         }
-        else
+
+        if(!input->touchpad_panning || !is_hovered)
         {
             if(tile->view->y_offset_pixels_intertia)
             {
-                tile->view->y_offset_pixels_intertia = f32_exp_decay(tile->view->y_offset_pixels_intertia, 0.0f, 1.47f, delta_time);
-                scroll_amount = tile->view->y_offset_pixels_intertia * delta_time;
+                tile->view->y_offset_pixels_intertia = f32_exp_decay(tile->view->y_offset_pixels_intertia, 0.0f, 1.47f, input->delta_time);
+                scroll_amount = tile->view->y_offset_pixels_intertia * input->delta_time;
             }
         }
 
@@ -1625,8 +1633,6 @@ internal renderer_command *draw(rained_input *input)
     }
     PROFILE_END();
 
-    i32 pan_delta = 0;
-    
     rained_view *view = global_state.focused_tile->view;
 
     for(u32 i = 0; i < input->input_queue_count; i++)
@@ -1961,70 +1967,6 @@ internal renderer_command *draw(rained_input *input)
             }
         }
 
-        if(e.type == INPUT_EVENT_TOUCHPAD_SCAN)
-        {
-            static touchpad_scan prev_scan;
-
-            if(e.touchpad_scan.count_down >= 2)
-            {
-                if(global_state.panning)
-                {
-                    for(u32 i = 0; i < RAINED_TOUCHPAD_MAX_CONTACTS; i++)
-                    {
-                        touchpad_contact c = e.touchpad_scan.contacts[i];
-    
-                        if(c.is_down)
-                        {
-                            touchpad_contact c0 = prev_scan.contacts[i];
-                            
-                            if(c0.is_down)
-                            {
-                                pan_delta += c.y - c0.y;
-                            }
-                        }
-                    }
-
-                    pan_delta /= (i32)e.touchpad_scan.count_down;
-
-                    global_state.pan_history[global_state.pan_history_position] = (pan_history)
-                    {
-                        .delta_time_us = e.touchpad_scan.delta_time_us,
-                        .delta = pan_delta    
-                    };
-                    global_state.pan_history_position++;
-                    global_state.pan_history_position %= 127;
-                    global_state.pan_history_count = min(global_state.pan_history_count + 1, 128);
-                }
-                else
-                {
-                    global_state.panning = 1;
-                    global_state.pan_inertia = 0;
-                    global_state.pan_history_position = 0;
-                    global_state.pan_history_count = 0;
-                }
-            }
-            else if(global_state.panning)
-            {
-                global_state.panning = 0;
-
-                u32 time_us = 0;
-                i32 delta = 0;
-                u32 idx = global_state.pan_history_position;
-                for(u32 i = 0; i < global_state.pan_history_count - 1; i++)
-                {
-                    pan_history h = global_state.pan_history[idx];
-                    time_us += h.delta_time_us;
-                    delta += h.delta;
-                    idx--;
-                    idx = min(idx, 127);
-                }
-
-                global_state.pan_inertia = (f32)delta / time_us * 1000000.0f;
-            }
-
-            prev_scan = e.touchpad_scan;
-        }
-
         merge_overlapping_carets_in_a_slow_way(view);
     }
 
@@ -2089,7 +2031,7 @@ internal renderer_command *draw(rained_input *input)
     while(t)
     {
         b32 hovered = rect_contains_point(t->rect, input->mouse_x, input->mouse_y);
-        draw_tile(&ctx, t, global_state.focused_tile == t, global_state.panning & hovered, pan_delta, global_state.pan_inertia, input->delta_time);
+        draw_tile(&ctx, t, global_state.focused_tile == t, hovered, input);
         t = t->next;
     }
 
@@ -2106,22 +2048,6 @@ internal renderer_command *draw(rained_input *input)
         },
         .quad.color = 0x001F1F1F
     });
-
-    /*
-    for(u32 i = 0; i < input->num_touchpad_contacts; i++)
-    {
-        touchpad_contact c = input->touchpad_contacts[i];
-        push_renderer_command(&ctx, (renderer_command)
-        {
-            .kind = RENDERER_COMMAND_RECT,
-            .quad.color = 0xFFFF0000,
-            .rect.min_x = c.x / 1.4f - 10,
-            .rect.max_x = c.x / 1.4f + 10,
-            .rect.min_y = c.y / 1.4f - 10,
-            .rect.max_y = c.y / 1.4f + 10,
-        });
-    }
-    */
 
     return ctx.commands_first;
 }

@@ -100,7 +100,6 @@ typedef enum INPUT_EVENT
     INPUT_EVENT_KEY,
     INPUT_EVENT_TEXT,
     INPUT_EVENT_MOUSE_BUTTON,
-    INPUT_EVENT_TOUCHPAD_SCAN
 
 } INPUT_EVENT;
 
@@ -158,24 +157,6 @@ typedef struct
 
 typedef struct
 {
-    b8                  is_down;
-    i32                 x;
-    i32                 y;
-
-} touchpad_contact;
-
-#define RAINED_TOUCHPAD_MAX_CONTACTS 5
-
-typedef struct
-{
-    u32                 delta_time_us;
-    u32                 count_down;
-    touchpad_contact    contacts[RAINED_TOUCHPAD_MAX_CONTACTS];
-
-} touchpad_scan;
-
-typedef struct
-{
     INPUT_EVENT     type;
     union
     {
@@ -193,7 +174,6 @@ typedef struct
             mouse_button_event mmb;
             u32 x, y;
         };
-        touchpad_scan touchpad_scan;
     };
 
 } input_event;
@@ -245,6 +225,11 @@ typedef struct
     u32                 screen_w, screen_h;
     u64                 frame_start;
     f32                 delta_time;
+
+    b32                 touchpad_panning;
+    f32                 touchpad_pan_delta;
+    b32                 touchpad_set_inertia;
+    f32                 touchpad_inertia;
 
 } rained_input;
 
@@ -598,6 +583,14 @@ internal string string_push_format(arena *arena, char *format, ...)
 #define sll_push(sll, e) { e->next = sll; sll = e; }
 #define sll_pop(sll) if(sll) { sll = sll->next; }
 #define dll_push(dll, e) { e->next = dll; if(dll) { dll->prev = e; } dll = e; }
+#define ring_prev_pos(pos, capacity) (min(pos - 1, capacity - 1))
+#define ring_next_pos(pos, capacity) ((pos + 1) >= capacity ? 0 : (pos + 1))
+#define ring_push(buffer, e, pos, count, capacity) \
+{ \
+    buffer[pos] = e; \
+    pos = ring_next_pos(pos, capacity); \
+    count = min(count + 1, capacity); \
+} \
 
 #ifdef SPALL_ENABLED
 

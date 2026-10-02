@@ -37,13 +37,14 @@ char                        sprintf_buf[1024]; // for sprintf, dumb
 u64                         frame_start;
 u32                         cell_buffer_count;
 DWORD                       thread_context_tls_index;
-i16                         ptp_link_collections[RAINED_TOUCHPAD_MAX_CONTACTS];
-u16                         ptp_prev_ids[RAINED_TOUCHPAD_MAX_CONTACTS];
-u16                         ptp_prev_scan_time;
+
+i16                         ptp_link_collections[5];
 HANDLE                      ptp_device_handle;
 PHIDP_PREPARSED_DATA        ptp_ppd;
 u32                         ptp_rawinput_size;
 RAWINPUT                    *ptp_rawinput;
+b32                         ptp_panning;
+u32                         ptp_pan_scan_count;
 
 internal void os_mem_reserve(u64 size, void **address)
 {
@@ -552,29 +553,46 @@ internal void win32_ptp_init(arena *arena)
     }
 }
 
-internal touchpad_scan win32_parse_ptp_scan(RAWINPUT *ri)
+typedef struct
 {
-    touchpad_scan scan = { 0 };
+    u16 id;
+    i16 x;
+    i16 y;
+    b8  tip;
+    b8  confidence;
 
+} win32_ptp_contact;
+
+typedef struct
+{
+    u16                 time;
+    u16                 contact_count;
+    win32_ptp_contact   contacts[5];
+
+    u16                 dt;
+    f32                 cx, cy, dx, dy;
+
+} win32_ptp_scan;
+
+internal win32_ptp_scan win32_parse_ptp_scan(RAWINPUT *ri)
+{
     PCHAR report = (PCHAR)ri->data.hid.bRawData;
     u32 report_length = ri->data.hid.dwSizeHid;
 
     ULONG scan_time = 0, contact_count = 0;
+
     HidP_GetUsageValue(HidP_Input, 0x0d, 0, 0x56, &scan_time, ptp_ppd, report, report_length);
     HidP_GetUsageValue(HidP_Input, 0x0d, 0, 0x54, &contact_count, ptp_ppd, report, report_length);
-    
-    if(ptp_prev_scan_time)
+
+    win32_ptp_scan scan = 
     {
-        u16 d = (u16)scan_time - ptp_prev_scan_time;
-        scan.delta_time_us = d * 100;
-    }
-    ptp_prev_scan_time = scan_time;
-    
-    u32 num_contacts_down = 0;
-    u16 ids[RAINED_TOUCHPAD_MAX_CONTACTS] = { 0 };
+        .time = scan_time,
+        .contact_count = contact_count 
+    };
 
     for(u32 i = 0; i < contact_count; i++)
     {   
+        win32_ptp_contact *contact = &scan.contacts[i];
         u16 lc = ptp_link_collections[i];
         ULONG usage_count = 16;
         USAGE usages[16];
@@ -592,58 +610,33 @@ internal touchpad_scan win32_parse_ptp_scan(RAWINPUT *ri)
 
         for(u32 j = 0; j < usage_count; j++)
         {
-            if(usages[j] == 0x42) // tip == 1
+            if(usages[j] == 0x42) 
             {
-                ULONG id = 0, x = 0, y = 0;
-                HidP_GetUsageValue(HidP_Input, 0x0d, lc, 0x51, &id, ptp_ppd, report, report_length);
-                HidP_GetUsageValue(HidP_Input, 0x01, lc, 0x30, &x, ptp_ppd, report, report_length);
-                HidP_GetUsageValue(HidP_Input, 0x01, lc, 0x31, &y, ptp_ppd, report, report_length);
-            
-                u32 contact_index = i;
-                ids[i] = id;
-
-                for(u32 k = 0; k < RAINED_TOUCHPAD_MAX_CONTACTS; k++)
-                {
-                    if(id == ptp_prev_ids[k])
-                    {
-                        contact_index = k;
-                        break;
-                    }
-                }
-
-                scan.contacts[contact_index] = (touchpad_contact)
-                {
-                    .is_down = 1,
-                    .x = x,
-                    .y = y,
-                };
-
-                scan.count_down++;
-
-                break;
+                contact->tip = 1;
+            }
+            if(usages[j] == 0x47)
+            {
+                contact->confidence = 1;
             }
         }
-    }
 
-    for(u32 i = 0; i < RAINED_TOUCHPAD_MAX_CONTACTS; i++)
-    {
-        ptp_prev_ids[i] = ids[i];
+        ULONG id = 0, x = 0, y = 0;
+        HidP_GetUsageValue(HidP_Input, 0x0d, lc, 0x51, &id, ptp_ppd, report, report_length);
+        HidP_GetUsageValue(HidP_Input, 0x01, lc, 0x30, &x, ptp_ppd, report, report_length);
+        HidP_GetUsageValue(HidP_Input, 0x01, lc, 0x31, &y, ptp_ppd, report, report_length);
+        contact->id = id;
+        contact->x = x;
+        contact->y = y;
     }
-
-    os_debug_printf("ptp scan; dt: %dus\n", scan.delta_time_us);
-    os_debug_printf("{\n");
-    for(u32 i = 0; i < RAINED_TOUCHPAD_MAX_CONTACTS; i++)
-    {
-        touchpad_contact c = scan.contacts[i];
-        if(c.is_down)
-        {
-            os_debug_printf("    contact %d; x: %d; y: %d\n", i, c.x, c.y);
-        }
-    }
-    os_debug_printf("}\n");
 
     return scan;
 }
+
+#define PTP_SCAN_BUFFER_CAPACITY 128
+win32_ptp_scan              ptp_scan_buffer[PTP_SCAN_BUFFER_CAPACITY];
+u32                         ptp_scan_buffer_position;
+u32                         ptp_scan_buffer_count;
+u32                         ptp_scan_buffer_read_position;
 
 static input_event input_queue[128];
 static u32         input_queue_count;
@@ -670,13 +663,9 @@ LRESULT window_callback(HWND window,
                 {
                     size = ptp_rawinput_size;
                     GetRawInputData((HRAWINPUT)lParam, RID_INPUT, ptp_rawinput, &size, sizeof(RAWINPUTHEADER));
-                    touchpad_scan scan = win32_parse_ptp_scan(ptp_rawinput);
-                    input_queue[input_queue_count] = (input_event)
-                    {
-                        .type = INPUT_EVENT_TOUCHPAD_SCAN,
-                        .touchpad_scan = scan
-                    };
-                    input_queue_count++;
+                    win32_ptp_scan s = win32_parse_ptp_scan(ptp_rawinput);
+                    ring_push(ptp_scan_buffer, s, ptp_scan_buffer_position, ptp_scan_buffer_count, PTP_SCAN_BUFFER_CAPACITY);
+                    assert(ptp_scan_buffer_position != ptp_scan_buffer_read_position);
                 }
             }
 
@@ -1139,6 +1128,83 @@ void __stdcall WinMainCRTStartup()
             .screen_w = screen_w,
             .delta_time = (f32)prev_frame / 1000000.0f,
         };
+
+        if(ptp_scan_buffer_count)
+        {
+            while(ptp_scan_buffer_read_position != ptp_scan_buffer_position)
+            {
+                win32_ptp_scan *scan = &ptp_scan_buffer[ptp_scan_buffer_read_position];
+
+                os_debug_printf("ptp scan\ntime: +%d us;\ncount: %d;\n", scan->time * 100, scan->contact_count);
+                for(u32 i = 0; i < scan->contact_count; i++)
+                {
+                    win32_ptp_contact c = scan->contacts[i];
+                    os_debug_printf("    contact id %d; x: %d; y: %d confd: %d; tip: %d;\n", c.id, c.x, c.y, c.confidence, c.tip);
+                }
+                os_debug_printf("}\n");
+                
+                u8 contacts_actually_down = 0;
+                i16 cx = 0, cy = 0;
+                for(u32 i = 0; i < scan->contact_count; i++)
+                {
+                    win32_ptp_contact c = scan->contacts[i];
+                    if(c.confidence && c.tip)
+                    {
+                        contacts_actually_down++;
+                        cx += c.x;
+                        cy += c.y;
+                    }
+                }
+
+                if(contacts_actually_down)
+                {
+                    scan->cx = (f32)cx / contacts_actually_down;
+                    scan->cy = (f32)cy / contacts_actually_down;
+                }
+
+                if(contacts_actually_down >= 2)
+                {
+                    if(ptp_panning)
+                    {
+                        win32_ptp_scan prev_scan = ptp_scan_buffer[ring_prev_pos(ptp_scan_buffer_read_position, PTP_SCAN_BUFFER_CAPACITY)];
+                        scan->dx = scan->cx - prev_scan.cx;
+                        scan->dy = scan->cy - prev_scan.cy;
+                        u16 d = scan->time - prev_scan.time;
+                        scan->dt = d;
+                        in.touchpad_pan_delta += scan->dy;
+                        ptp_pan_scan_count++;
+                    }
+                    else
+                    {
+                        ptp_panning = 1;
+                        ptp_pan_scan_count = 0;
+                    }
+                }
+                else if(ptp_panning)
+                {
+                    ptp_panning = 0;
+
+                    u32 p = ring_prev_pos(ptp_scan_buffer_read_position, PTP_SCAN_BUFFER_CAPACITY);
+                    f32 vx = 0.0f, vy = 0.0f;
+                    u32 count = min(5, ptp_pan_scan_count - 1);
+                    for(u32 i = 0; i < count; i++)
+                    {
+                        win32_ptp_scan s = ptp_scan_buffer[p];
+                        vx += s.dx / s.dt * 10000.0f;
+                        vy += s.dy / s.dt * 10000.0f;
+                        p = ring_prev_pos(p, PTP_SCAN_BUFFER_CAPACITY);
+                    }
+                    vx /= (f32)count;
+                    vy /= (f32)count;
+                    in.touchpad_set_inertia = 1;
+                    in.touchpad_inertia = vy;
+                }
+
+                ptp_scan_buffer_read_position = ring_next_pos(ptp_scan_buffer_read_position, PTP_SCAN_BUFFER_CAPACITY);
+            }
+        }
+
+        in.touchpad_panning = ptp_panning;
 
         renderer_command *cmd = draw(&in);
         PROFILE_BEGIN("render");

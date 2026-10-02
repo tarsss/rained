@@ -2,6 +2,7 @@
 #define RAINED_H
 
 #define SPALL_ENABLED
+#define RAINED_DEBUG
 
 #define STB_SPRINTF_IMPLEMENTATION
 #include "stb_sprintf.h"
@@ -83,6 +84,33 @@ u32 ceil_pow2_u32(u32 n)
     }
     u32 p = 1 << (32 - __lzcnt(n - 1));
     return p;
+}
+
+internal f32 f32_abs(f32 x)
+{
+    return x > 0.0f ? x : -x;
+}
+
+internal b8 f32_is_real(f32 x)
+{
+    u32 bits = *(u32 *)&x;
+    return (bits & 0x7f800000) != 0x7f800000;
+}
+
+internal f32 f32_exp(f32 x)
+{
+    f32 sum = 1.0f;
+    f32 term = 1.0f;
+    for (u32 i = 1; i < 11; ++i) {
+        term *= x / (f32)i;
+        sum += term;
+    }
+    return sum;
+}
+
+internal f32 f32_exp_decay(f32 a, f32 b, f32 decay, f32 dt)
+{
+    return b + (a - b) * f32_exp(-decay * dt);
 }
 
 typedef struct

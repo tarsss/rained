@@ -45,6 +45,7 @@ u32                         ptp_rawinput_size;
 RAWINPUT                    *ptp_rawinput;
 b32                         ptp_panning;
 u32                         ptp_pan_scan_count;
+b32                         ptp_up_since_pan;
 
 internal void os_mem_reserve(u64 size, void **address)
 {
@@ -1126,7 +1127,7 @@ void __stdcall WinMainCRTStartup()
             .mmb = mmb,
             .screen_h = screen_h,
             .screen_w = screen_w,
-            .delta_time = (f32)prev_frame / 1000000.0f,
+            .delta_time = min((f32)prev_frame / 1000000.0f, 1/30.0f),
         };
 
         if(ptp_scan_buffer_count)
@@ -1135,6 +1136,7 @@ void __stdcall WinMainCRTStartup()
             {
                 win32_ptp_scan *scan = &ptp_scan_buffer[ptp_scan_buffer_read_position];
 
+                #ifdef RAINED_DEBUG
                 os_debug_printf("ptp scan\ntime: +%d us;\ncount: %d;\n", scan->time * 100, scan->contact_count);
                 for(u32 i = 0; i < scan->contact_count; i++)
                 {
@@ -1142,6 +1144,7 @@ void __stdcall WinMainCRTStartup()
                     os_debug_printf("    contact id %d; x: %d; y: %d confd: %d; tip: %d;\n", c.id, c.x, c.y, c.confidence, c.tip);
                 }
                 os_debug_printf("}\n");
+                #endif
                 
                 u8 contacts_actually_down = 0;
                 i16 cx = 0, cy = 0;
@@ -1162,31 +1165,61 @@ void __stdcall WinMainCRTStartup()
                     scan->cy = (f32)cy / contacts_actually_down;
                 }
 
+                f32 k = 0.13f;
                 if(contacts_actually_down >= 2)
                 {
                     if(ptp_panning)
                     {
                         win32_ptp_scan prev_scan = ptp_scan_buffer[ring_prev_pos(ptp_scan_buffer_read_position, PTP_SCAN_BUFFER_CAPACITY)];
-                        scan->dx = scan->cx - prev_scan.cx;
-                        scan->dy = scan->cy - prev_scan.cy;
+                        scan->dx = (scan->cx - prev_scan.cx) * k;
+                        scan->dy = (scan->cy - prev_scan.cy) * k;
                         u16 d = scan->time - prev_scan.time;
                         scan->dt = d;
+
+                        f32 vx = f32_abs(scan->dx / scan->dt * 10000.0f);
+                        f32 vy = f32_abs(scan->dy / scan->dt * 10000.0f);
+                        
+                        /*
+                        f32 v_threshold = 0.0f;
+                        vx = min(vx, 500);
+                        vy = min(vy, 500);
+                        if(vx > v_threshold)
+                        {
+                            scan->dx *= (1.0f + (vx - v_threshold) * v_k);
+                        }
+                        if(vy > v_threshold)
+                        {
+                            scan->dy *= (1.0f + (vy - v_threshold) * v_k);
+                        }
+                        */
+
+                        f32 a = 3.0f;
+                        f32 k = 500.0f;
+                        f32 my = 1.0f + a * vy / (vy + k);
+                        scan->dy *= my;
+                        f32 mx = 1.0f + a * vx / (vx + k);
+                        scan->dx *= mx;
+
                         in.touchpad_pan_delta += scan->dy;
                         ptp_pan_scan_count++;
+                        assert(f32_is_real(in.touchpad_pan_delta));
+
                     }
                     else
                     {
                         ptp_panning = 1;
                         ptp_pan_scan_count = 0;
+                        ptp_up_since_pan = 0;
                     }
                 }
                 else if(ptp_panning)
                 {
                     ptp_panning = 0;
-
+                    
+                    // todo: actually average N ms back instead of N samples back... how do you get a wall clock scan time?
                     u32 p = ring_prev_pos(ptp_scan_buffer_read_position, PTP_SCAN_BUFFER_CAPACITY);
                     f32 vx = 0.0f, vy = 0.0f;
-                    u32 count = min(5, ptp_pan_scan_count - 1);
+                    u32 count = min(5, min(ptp_pan_scan_count, ptp_pan_scan_count - 1));
                     for(u32 i = 0; i < count; i++)
                     {
                         win32_ptp_scan s = ptp_scan_buffer[p];
@@ -1194,11 +1227,22 @@ void __stdcall WinMainCRTStartup()
                         vy += s.dy / s.dt * 10000.0f;
                         p = ring_prev_pos(p, PTP_SCAN_BUFFER_CAPACITY);
                     }
-                    vx /= (f32)count;
-                    vy /= (f32)count;
+                    if(count)
+                    {
+                        vx /= (f32)count;
+                        vy /= (f32)count;
+                    }
                     in.touchpad_set_inertia = 1;
                     in.touchpad_inertia = vy;
+                    assert(f32_is_real(vy));
                 }
+                else if(ptp_up_since_pan)
+                {
+                    in.touchpad_set_inertia = 1;
+                    in.touchpad_inertia = 0.0f;
+                }
+
+                ptp_up_since_pan |= contacts_actually_down == 0;
 
                 ptp_scan_buffer_read_position = ring_next_pos(ptp_scan_buffer_read_position, PTP_SCAN_BUFFER_CAPACITY);
             }

@@ -1,11 +1,5 @@
 #include "rained.h"
 
-typedef struct
-{
-    u32 delta_time_us;
-    i32 delta;
-
-} pan_history;
 
 typedef struct rained_clang_state rained_clang_state;
 
@@ -23,10 +17,6 @@ typedef struct
     font_atlas          font;
     b32                 reparse_pending;
     b32                 panning;
-    f32                 pan_inertia;
-    pan_history         pan_history[128];
-    u32                 pan_history_position;
-    u32                 pan_history_count;
 
 } rained_state;
 
@@ -1345,24 +1335,9 @@ internal u32 tile_screen_pos_to_view_buffer_text_pos(rained_tile *tile, i32 scre
     return line.pos_in_text + min(line.length - 1, pos_column);
 }
 
-internal f32 f32_exp(f32 x)
-{
-    f32 sum = 1.0f;
-    f32 term = 1.0f;
-    for (u32 i = 1; i < 11; ++i) {
-        term *= x / (f32)i;
-        sum += term;
-    }
-    return sum;
-}
-
-internal f32 f32_exp_decay(f32 a, f32 b, f32 decay, f32 dt)
-{
-    return b + (a - b) * f32_exp(-decay * dt);
-}
-
 internal void draw_tile(draw_context *ctx, rained_tile *tile, b32 is_focused, b32 is_hovered, rained_input *input)
 {
+    PROFILE_BEGIN("draw_tile");
     if(tile->view)
     {
         ctx->rect = tile->rect;
@@ -1386,13 +1361,29 @@ internal void draw_tile(draw_context *ctx, rained_tile *tile, b32 is_focused, b3
         {
             if(tile->view->y_offset_pixels_intertia)
             {
-                tile->view->y_offset_pixels_intertia = f32_exp_decay(tile->view->y_offset_pixels_intertia, 0.0f, 1.47f, input->delta_time);
-                scroll_amount = tile->view->y_offset_pixels_intertia * input->delta_time;
+                // todo: dumb integration. verify it's correct..
+                f32 t = input->delta_time;
+                while(t > 0.0f)
+                {
+                    f32 max_step_s = 0.001f;
+                    f32 step = min(t, max_step_s);
+                    t -= max_step_s;
+                    f32 decay = 1.8f;
+        
+                    if(f32_abs(tile->view->y_offset_pixels_intertia) < 100.0f)
+                    {
+                        decay = 6.67f;
+                    }
+        
+                    tile->view->y_offset_pixels_intertia = f32_exp_decay(tile->view->y_offset_pixels_intertia, 0.0f, decay, step);
+                    scroll_amount += tile->view->y_offset_pixels_intertia * step;
+                }
             }
         }
 
         draw_view(ctx, tile->view, scroll_amount, is_focused);
     }
+    PROFILE_END();
 }
 
 internal void carets_delete(rained_view *view, b32 delete_to_the_right, b32 delete_until_next_token)

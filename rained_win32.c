@@ -10,8 +10,10 @@
 #include <hidclass.h>
 #include <hidsdi.h>
 #include <hidpi.h>
+#include <directmanipulation.h>
 ; // FUCK OFFFFFFFFFF CLANG
 #include "rained.c"
+
 
 HWND                        window;
 WINDOWPLACEMENT             windowedPlacement;
@@ -30,22 +32,17 @@ u32                         frame_count;
 u64                         perf_counter_freq;
 b8                          quit;
 i16                         mouse_wheel_delta_accum;
-f32                         mouse_wheel_delta;
 i32                         mouse_x, mouse_y;
 b32                         lmb, rmb, mmb;
 char                        sprintf_buf[1024]; // for sprintf, dumb
 u64                         frame_start;
 u32                         cell_buffer_count;
 DWORD                       thread_context_tls_index;
-
-i16                         ptp_link_collections[5];
-HANDLE                      ptp_device_handle;
-PHIDP_PREPARSED_DATA        ptp_ppd;
-u32                         ptp_rawinput_size;
-RAWINPUT                    *ptp_rawinput;
-b32                         ptp_panning;
-u32                         ptp_pan_scan_count;
-b32                         ptp_up_since_pan;
+IDirectManipulationManager          *dm_manager;
+IDirectManipulationUpdateManager    *dm_update_manager;
+IDirectManipulationViewport         *dm_viewport;
+IDirectManipulationContent          *dm_content;
+f32                                 dm_prev_y;
 
 internal void os_mem_reserve(u64 size, void **address)
 {
@@ -482,163 +479,6 @@ internal void os_create_thread(void (* routine)(void *), void *data, c16 *name)
     ResumeThread(handle);
 }
 
-internal void win32_ptp_init(arena *arena)
-{
-    u32 num_devices = 0;
-    GetRawInputDeviceList(NULL, &num_devices, sizeof(RAWINPUTDEVICELIST));
-    RAWINPUTDEVICELIST *devices = arena_push(arena, num_devices * sizeof(RAWINPUTDEVICELIST), 8);
-    GetRawInputDeviceList(devices, &num_devices, sizeof(RAWINPUTDEVICELIST));
-
-    for (u32 i = 0; i < num_devices; i++) 
-    {
-        if (devices[i].dwType != RIM_TYPEHID) { continue; }
-
-        u32 device_info_size = sizeof(RID_DEVICE_INFO);
-        RID_DEVICE_INFO device_info = { 0 };
-        GetRawInputDeviceInfo(devices[i].hDevice, RIDI_DEVICEINFO, &device_info, &device_info_size);
-
-        if (device_info.dwType != RIM_TYPEHID) { continue; }
-
-        // Usage Page should be 0x0d (Digitizers)
-        // Usage should be 0x05 (Touch Pads)
-        if (device_info.hid.usUsagePage == 0x0d && device_info.hid.usUsage == 0x05) 
-        {
-            ptp_device_handle = devices[i].hDevice;
-            break;
-        }
-    }
-
-    if(!ptp_device_handle)
-    {
-        return;
-    }
-
-    RAWINPUTDEVICE rid = 
-    {
-        .usUsagePage = 0x0d,
-        .usUsage = 0x05,
-        .hwndTarget = window
-    };
-
-    RegisterRawInputDevices(&rid, 1, sizeof(RAWINPUTDEVICE));
-
-    u32 ppd_size = 0;
-    GetRawInputDeviceInfo(ptp_device_handle, RIDI_PREPARSEDDATA, NULL, &ppd_size);
-    
-    ptp_ppd = (PHIDP_PREPARSED_DATA)arena_push(arena, ppd_size, 8);
-
-    GetRawInputDeviceInfo(ptp_device_handle, RIDI_PREPARSEDDATA, ptp_ppd, &ppd_size);
-
-    HIDP_CAPS caps = { 0 };
-    HidP_GetCaps(ptp_ppd, &caps);
-
-    ptp_rawinput_size = sizeof(RAWINPUTHEADER) + sizeof(RAWHID) + caps.InputReportByteLength;
-    ptp_rawinput = arena_push(arena, ptp_rawinput_size, 8);
-    
-    u16 num_value_caps = caps.NumberInputValueCaps;
-    HIDP_VALUE_CAPS *value_caps = arena_push(arena, sizeof(HIDP_VALUE_CAPS) * num_value_caps, 8);
-    HidP_GetValueCaps(HidP_Input, value_caps, &num_value_caps, ptp_ppd);
-
-    // note: value seems to be equal index each time
-    u32 link_index = 0;
-    for (u32 i = 0; i < num_value_caps; i++) 
-    {
-        if (value_caps[i].UsagePage == 0x0d) 
-        {
-            if (value_caps[i].NotRange.Usage == 0x51) 
-            {
-                ptp_link_collections[link_index] = value_caps[i].LinkCollection;
-                link_index++;
-            }
-        }
-    }
-}
-
-typedef struct
-{
-    u16 id;
-    i16 x;
-    i16 y;
-    b8  tip;
-    b8  confidence;
-
-} win32_ptp_contact;
-
-typedef struct
-{
-    u16                 time;
-    u16                 contact_count;
-    win32_ptp_contact   contacts[5];
-
-    u16                 dt;
-    f32                 cx, cy, dx, dy;
-
-} win32_ptp_scan;
-
-internal win32_ptp_scan win32_parse_ptp_scan(RAWINPUT *ri)
-{
-    PCHAR report = (PCHAR)ri->data.hid.bRawData;
-    u32 report_length = ri->data.hid.dwSizeHid;
-
-    ULONG scan_time = 0, contact_count = 0;
-
-    HidP_GetUsageValue(HidP_Input, 0x0d, 0, 0x56, &scan_time, ptp_ppd, report, report_length);
-    HidP_GetUsageValue(HidP_Input, 0x0d, 0, 0x54, &contact_count, ptp_ppd, report, report_length);
-
-    win32_ptp_scan scan = 
-    {
-        .time = scan_time,
-        .contact_count = contact_count 
-    };
-
-    for(u32 i = 0; i < contact_count; i++)
-    {   
-        win32_ptp_contact *contact = &scan.contacts[i];
-        u16 lc = ptp_link_collections[i];
-        ULONG usage_count = 16;
-        USAGE usages[16];
-        HidP_GetUsages(HidP_Input, 0x0d, lc, usages, &usage_count, ptp_ppd, report, report_length);
-
-        // todo: this fucking thing is too confident. sometimes it would report contacts for one additional scan after finger lift, reporting the same position, obviously not true... maybe cull contact if prev velocity big enough?
-        b8 confidence = 0;
-        for(u32 j = 0; j < usage_count; j++)
-        {
-            if(usages[j] == 0x47)
-            {
-                confidence = 1;
-            }
-        }
-
-        for(u32 j = 0; j < usage_count; j++)
-        {
-            if(usages[j] == 0x42) 
-            {
-                contact->tip = 1;
-            }
-            if(usages[j] == 0x47)
-            {
-                contact->confidence = 1;
-            }
-        }
-
-        ULONG id = 0, x = 0, y = 0;
-        HidP_GetUsageValue(HidP_Input, 0x0d, lc, 0x51, &id, ptp_ppd, report, report_length);
-        HidP_GetUsageValue(HidP_Input, 0x01, lc, 0x30, &x, ptp_ppd, report, report_length);
-        HidP_GetUsageValue(HidP_Input, 0x01, lc, 0x31, &y, ptp_ppd, report, report_length);
-        contact->id = id;
-        contact->x = x;
-        contact->y = y;
-    }
-
-    return scan;
-}
-
-#define PTP_SCAN_BUFFER_CAPACITY 128
-win32_ptp_scan              ptp_scan_buffer[PTP_SCAN_BUFFER_CAPACITY];
-u32                         ptp_scan_buffer_position;
-u32                         ptp_scan_buffer_count;
-u32                         ptp_scan_buffer_read_position;
-
 static input_event input_queue[128];
 static u32         input_queue_count;
 
@@ -650,28 +490,9 @@ LRESULT window_callback(HWND window,
     stbsp_sprintf(sprintf_buf, "msg 0x%04X\n", message);
     PROFILE_BEGIN(sprintf_buf);
     LRESULT result = 0;
+
     switch (message)
     {
-        case WM_INPUT:
-        {
-            RAWINPUTHEADER header = { 0 };
-            u32 size = sizeof(RAWINPUTHEADER);
-            GetRawInputData((HRAWINPUT)lParam, RID_HEADER, &header, &size, sizeof(RAWINPUTHEADER));
-
-            if(header.hDevice == ptp_device_handle)
-            {
-                if(header.dwSize <= ptp_rawinput_size)
-                {
-                    size = ptp_rawinput_size;
-                    GetRawInputData((HRAWINPUT)lParam, RID_INPUT, ptp_rawinput, &size, sizeof(RAWINPUTHEADER));
-                    win32_ptp_scan s = win32_parse_ptp_scan(ptp_rawinput);
-                    ring_push(ptp_scan_buffer, s, ptp_scan_buffer_position, ptp_scan_buffer_count, PTP_SCAN_BUFFER_CAPACITY);
-                    assert(ptp_scan_buffer_position != ptp_scan_buffer_read_position);
-                }
-            }
-
-            break;
-        }
         case WM_SYSKEYDOWN:
         case WM_SYSKEYUP:
         case WM_KEYUP:
@@ -717,14 +538,17 @@ LRESULT window_callback(HWND window,
             input_queue_count++;
             break;
         }
-        /*
         case WM_MOUSEWHEEL:
         {
             mouse_wheel_delta_accum += (i16)(wParam >> 16);
-
             break;
         }
-        */
+        case DM_POINTERHITTEST:
+        {
+            WORD pointer_id = LOWORD(wParam);
+            IDirectManipulationViewport_SetContact(dm_viewport, pointer_id);
+            break;
+        }
         case WM_MOUSEMOVE:
         {
             mouse_x = LOWORD(lParam);
@@ -874,9 +698,27 @@ void __stdcall WinMainCRTStartup()
         0);
     assert(window);
     
-    arena *scratch = arena_alloc(gb(1), mb(1));
+    CoInitializeEx(0, COINIT_APARTMENTTHREADED);
+    CoCreateInstance(&CLSID_DirectManipulationManager, 0, CLSCTX_INPROC_SERVER, &IID_IDirectManipulationManager, (void **)&dm_manager);
 
-    win32_ptp_init(scratch);
+    IDirectManipulationManager_GetUpdateManager(dm_manager, &IID_IDirectManipulationUpdateManager, (void **)&dm_update_manager);
+    IDirectManipulationManager_CreateViewport(dm_manager, 0, window, &IID_IDirectManipulationViewport, (void **)&dm_viewport);
+
+    IDirectManipulationViewport_ActivateConfiguration(dm_viewport,
+        DIRECTMANIPULATION_CONFIGURATION_INTERACTION |
+        DIRECTMANIPULATION_CONFIGURATION_TRANSLATION_Y |
+        DIRECTMANIPULATION_CONFIGURATION_TRANSLATION_INERTIA);
+    IDirectManipulationViewport_SetViewportOptions(dm_viewport, DIRECTMANIPULATION_VIEWPORT_OPTIONS_MANUALUPDATE | DIRECTMANIPULATION_VIEWPORT_OPTIONS_DISABLEPIXELSNAPPING);
+    RECT viewport_rect = { 0, 0, -1, -1 };
+    IDirectManipulationViewport_SetViewportRect(dm_viewport, &viewport_rect);
+
+    IDirectManipulationViewport_GetPrimaryContent(dm_viewport, &IID_IDirectManipulationContent, (void **)&dm_content);
+    RECT content_rect = { 0, 0x7fffffff, 0, 0x80000000 };
+    IDirectManipulationContent_SetContentRect(dm_content, &content_rect);
+
+    IDirectManipulationManager_Activate(dm_manager, window);
+    IDirectManipulationViewport_Enable(dm_viewport);
+    IDirectManipulationUpdateManager_Update(dm_update_manager, 0);
 
     os_toggle_fullscreen();
     
@@ -1102,8 +944,6 @@ void __stdcall WinMainCRTStartup()
         }
         PROFILE_END();
 
-        mouse_wheel_delta = (f32) mouse_wheel_delta_accum / 120.0f * 32.0f;
-
         if(screen_w != new_screen_w || screen_h != new_screen_h)
         {
             screen_w = new_screen_w;
@@ -1128,127 +968,18 @@ void __stdcall WinMainCRTStartup()
             .screen_h = screen_h,
             .screen_w = screen_w,
             .delta_time = min((f32)prev_frame / 1000000.0f, 1/30.0f),
+            .mouse_wheel_delta = (f32) mouse_wheel_delta_accum / 120.0f * 32.0f
         };
 
-        if(ptp_scan_buffer_count)
-        {
-            while(ptp_scan_buffer_read_position != ptp_scan_buffer_position)
-            {
-                win32_ptp_scan *scan = &ptp_scan_buffer[ptp_scan_buffer_read_position];
+        f32 m[6];
+        IDirectManipulationUpdateManager_Update(dm_update_manager, NULL);
+        IDirectManipulationContent_GetContentTransform(dm_content, m, 6);
+        f32 y = m[5];
+        f32 dy = y - dm_prev_y;
+        dm_prev_y = y;
 
-                #ifdef RAINED_DEBUG
-                os_debug_printf("ptp scan\ntime: +%d us;\ncount: %d;\n", scan->time * 100, scan->contact_count);
-                for(u32 i = 0; i < scan->contact_count; i++)
-                {
-                    win32_ptp_contact c = scan->contacts[i];
-                    os_debug_printf("    contact id %d; x: %d; y: %d confd: %d; tip: %d;\n", c.id, c.x, c.y, c.confidence, c.tip);
-                }
-                os_debug_printf("}\n");
-                #endif
-                
-                u8 contacts_actually_down = 0;
-                i16 cx = 0, cy = 0;
-                for(u32 i = 0; i < scan->contact_count; i++)
-                {
-                    win32_ptp_contact c = scan->contacts[i];
-                    if(c.confidence && c.tip)
-                    {
-                        contacts_actually_down++;
-                        cx += c.x;
-                        cy += c.y;
-                    }
-                }
-
-                if(contacts_actually_down)
-                {
-                    scan->cx = (f32)cx / contacts_actually_down;
-                    scan->cy = (f32)cy / contacts_actually_down;
-                }
-
-                f32 k = 0.13f;
-                if(contacts_actually_down >= 2)
-                {
-                    if(ptp_panning)
-                    {
-                        win32_ptp_scan prev_scan = ptp_scan_buffer[ring_prev_pos(ptp_scan_buffer_read_position, PTP_SCAN_BUFFER_CAPACITY)];
-                        scan->dx = (scan->cx - prev_scan.cx) * k;
-                        scan->dy = (scan->cy - prev_scan.cy) * k;
-                        u16 d = scan->time - prev_scan.time;
-                        scan->dt = d;
-
-                        f32 vx = f32_abs(scan->dx / scan->dt * 10000.0f);
-                        f32 vy = f32_abs(scan->dy / scan->dt * 10000.0f);
-                        
-                        /*
-                        f32 v_threshold = 0.0f;
-                        vx = min(vx, 500);
-                        vy = min(vy, 500);
-                        if(vx > v_threshold)
-                        {
-                            scan->dx *= (1.0f + (vx - v_threshold) * v_k);
-                        }
-                        if(vy > v_threshold)
-                        {
-                            scan->dy *= (1.0f + (vy - v_threshold) * v_k);
-                        }
-                        */
-
-                        f32 a = 3.0f;
-                        f32 k = 500.0f;
-                        f32 my = 1.0f + a * vy / (vy + k);
-                        scan->dy *= my;
-                        f32 mx = 1.0f + a * vx / (vx + k);
-                        scan->dx *= mx;
-
-                        in.touchpad_pan_delta += scan->dy;
-                        ptp_pan_scan_count++;
-                        assert(f32_is_real(in.touchpad_pan_delta));
-
-                    }
-                    else
-                    {
-                        ptp_panning = 1;
-                        ptp_pan_scan_count = 0;
-                        ptp_up_since_pan = 0;
-                    }
-                }
-                else if(ptp_panning)
-                {
-                    ptp_panning = 0;
-                    
-                    // todo: actually average N ms back instead of N samples back... how do you get a wall clock scan time?
-                    u32 p = ring_prev_pos(ptp_scan_buffer_read_position, PTP_SCAN_BUFFER_CAPACITY);
-                    f32 vx = 0.0f, vy = 0.0f;
-                    u32 count = min(5, min(ptp_pan_scan_count, ptp_pan_scan_count - 1));
-                    for(u32 i = 0; i < count; i++)
-                    {
-                        win32_ptp_scan s = ptp_scan_buffer[p];
-                        vx += s.dx / s.dt * 10000.0f;
-                        vy += s.dy / s.dt * 10000.0f;
-                        p = ring_prev_pos(p, PTP_SCAN_BUFFER_CAPACITY);
-                    }
-                    if(count)
-                    {
-                        vx /= (f32)count;
-                        vy /= (f32)count;
-                    }
-                    in.touchpad_set_inertia = 1;
-                    in.touchpad_inertia = vy;
-                    assert(f32_is_real(vy));
-                }
-                else if(ptp_up_since_pan)
-                {
-                    in.touchpad_set_inertia = 1;
-                    in.touchpad_inertia = 0.0f;
-                }
-
-                ptp_up_since_pan |= contacts_actually_down == 0;
-
-                ptp_scan_buffer_read_position = ring_next_pos(ptp_scan_buffer_read_position, PTP_SCAN_BUFFER_CAPACITY);
-            }
-        }
-
-        in.touchpad_panning = ptp_panning;
+        in.touchpad_panning = dy != 0.0f;
+        in.touchpad_pan_delta = dy;
 
         renderer_command *cmd = draw(&in);
         PROFILE_BEGIN("render");

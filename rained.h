@@ -1,8 +1,8 @@
 #ifndef RAINED_H
 #define RAINED_H
 
-#define SPALL_ENABLED
-#define RAINED_DEBUG
+//#define SPALL_ENABLED
+//#define RAINED_DEBUG
 
 #define STB_SPRINTF_IMPLEMENTATION
 #include "stb_sprintf.h"
@@ -253,7 +253,7 @@ typedef struct
     u32                 screen_w, screen_h;
     u64                 frame_start;
     f32                 delta_time;
-
+    f32                 mouse_wheel_delta;
     b32                 touchpad_panning;
     f32                 touchpad_pan_delta;
     b32                 touchpad_set_inertia;

@@ -1346,6 +1346,11 @@ internal void draw_tile(draw_context *ctx, rained_tile *tile, b32 is_focused, b3
 
         if(is_hovered)
         {
+            scroll_amount += input->mouse_wheel_delta;
+        }
+
+        if(is_hovered)
+        {
             if(input->touchpad_set_inertia)
             {
                 tile->view->y_offset_pixels_intertia = input->touchpad_inertia;
@@ -1353,7 +1358,7 @@ internal void draw_tile(draw_context *ctx, rained_tile *tile, b32 is_focused, b3
     
             if(input->touchpad_panning)
             {
-                scroll_amount = input->touchpad_pan_delta;
+                scroll_amount += input->touchpad_pan_delta;
             }
         }
 

@@ -277,6 +277,16 @@ internal highlight_token_array rained_clang_tokens_from_file(rained_clang_state 
                         t.kind = highlight_token_function;
                         break;
                     }
+                    case CXCursor_DeclRefExpr:
+                    {
+                        CXCursor cursor0 = clang_getCursorReferenced(cursor);
+                        enum CXCursorKind cursor_kind0 = clang_getCursorKind(cursor0);
+                        if(cursor_kind0 == CXCursor_FunctionDecl)
+                        {
+                            t.kind = highlight_token_function;
+                        }
+                        break;
+                    }
                     case CXCursor_MacroDefinition:
                     case CXCursor_MacroExpansion:
                     case CXCursor_EnumConstantDecl:

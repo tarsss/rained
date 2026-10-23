@@ -14,7 +14,6 @@
 ; // FUCK OFFFFFFFFFF CLANG
 #include "rained.c"
 
-
 HWND                        window;
 WINDOWPLACEMENT             windowedPlacement;
 HDC                         hdc;

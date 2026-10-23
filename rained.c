@@ -1,7 +1,5 @@
 #include "rained.h"
-
-
-typedef struct rained_clang_state rained_clang_state;
+#include "rained_parse.c"
 
 typedef struct
 {
@@ -12,17 +10,13 @@ typedef struct
     rained_tile         *tile_right;
     rained_tile         *focused_tile;
     rained_tile         *mouse_drag_tile;
-    rained_clang_state  *clang_state;
     u32                 font_size;
     font_atlas          font;
-    b32                 reparse_pending;
     b32                 panning;
 
 } rained_state;
 
 rained_state global_state;
-
-#include "rained_clang.c"
 
 internal u32 caret_get_column(rained_view *view, caret *caret)
 {
@@ -1157,7 +1151,7 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
     if(view->kind == rained_view_code && view->buffer->path.p)
     {
         PROFILE_BEGIN("tokens");
-        highlight_token_array arr = rained_clang_query_tokens_for_file(global_state.clang_state, view->buffer);
+        highlight_token_array arr = rained_tokens_from_buffer(view->buffer, global_state.frame_arena);
 
         for(u32 i = 0; i < arr.num_tokens; i++)
         {
@@ -1178,6 +1172,7 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
                 }
             }
 
+            #if 0
             // apply edits between the version of the buffer that was used for the latest token cache update and the current one...
             text_edit *e = view->buffer->patch_edits;
             while(e)
@@ -1210,6 +1205,7 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
                 }
                 e = e->prev;
             }
+            #endif
 
             if(t.offset + t.length < p)
             {
@@ -1607,17 +1603,6 @@ internal renderer_command *draw(rained_input *input)
         rained_view *v0 = tile_push_view(global_state.tile_left, b0);
         rained_view *v1 = tile_push_view(global_state.tile_right, b1);
         global_state.font_size = 18;
-        
-        global_state.clang_state = arena_push_struct_zero(global_state.forever_arena, rained_clang_state);
-        global_state.clang_state->arena = arena_alloc(tb(1), mb(1));
-        arena *clang_arena = arena_alloc(gb(1), mb(1));
-        rained_clang_thread_context *ctx = arena_push_struct(clang_arena, rained_clang_thread_context);
-        *ctx = (rained_clang_thread_context)
-        {
-            .state = global_state.clang_state,
-        };
-        os_create_thread(&rained_clang_thread_entry_point, ctx, L"rained_clang_thread");
-        rained_clang_schedule_reparse(global_state.clang_state, global_state.buffers);
     }
     arena_reset(global_state.frame_arena);
 
@@ -1716,6 +1701,7 @@ internal renderer_command *draw(rained_input *input)
                 }
                 else if(e.code == ('D' | MODIFIER_CTRL))
                 {
+                    /*
                     string file_name;
                     u32 position;
                     if(rained_clang_find_definition(global_state.clang_state, global_state.focused_tile->view->buffer, global_state.focused_tile->view->carets[0], &position, &file_name, global_state.frame_arena))
@@ -1733,6 +1719,7 @@ internal renderer_command *draw(rained_input *input)
                         global_state.focused_tile->view->carets[0].position = position;
                         global_state.focused_tile->view->fit_caret = 1;
                     }
+                    */
                 }
                 else if(e.code == ('C' | MODIFIER_CTRL))
                 {
@@ -1973,14 +1960,6 @@ internal renderer_command *draw(rained_input *input)
         any_buffer_is_dirty |= buffer->is_dirty;
         buffer->is_dirty = 0;
         buffer = buffer->next;
-    }
-
-    global_state.reparse_pending |= any_buffer_is_dirty;
-
-    if(global_state.reparse_pending)
-    {
-        b32 scheduled = rained_clang_schedule_reparse(global_state.clang_state, global_state.buffers);
-        global_state.reparse_pending = !scheduled;
     }
     
     // todo: doesn't work the way i want it to when mouse leaves the client area. im not sure what to do about this right now

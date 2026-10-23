@@ -1,8 +1,7 @@
 #ifndef RAINED_H
 #define RAINED_H
 
-//#define SPALL_ENABLED
-//#define RAINED_DEBUG
+#define SPALL_ENABLED
 
 #define STB_SPRINTF_IMPLEMENTATION
 #include "stb_sprintf.h"
@@ -528,6 +527,8 @@ internal void arena_commit_to_fit_used(arena *arena)
 #define arena_push_struct_zero(a, s) (memset(arena_push(a, sizeof(s), 8), 0, sizeof(s)))
 #define arena_copy(a, p, s) (memcpy(arena_push(a, s, 8), p, s))
 #define arena_head(a) ((void*)((u8*)a->base + a->used))
+
+#define string_literal(cstr) ((string) { .p = (char*)&cstr, .length = lengthof(cstr) - 1} )
 
 internal u32 cstring_length(char *cstr)
 {

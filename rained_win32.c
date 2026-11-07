@@ -12,7 +12,7 @@
 #include <hidpi.h>
 #include <directmanipulation.h>
 ; // FUCK OFFFFFFFFFF CLANG
-#include "rained.c"
+#include"rained.c"
 
 HWND                        window;
 WINDOWPLACEMENT             windowedPlacement;
@@ -830,7 +830,6 @@ void __stdcall WinMainCRTStartup()
         .Flags = swapchain_flags
     };
 
-    swapchain_flags = swapchain_flags;
     hr = IDXGIFactory2_CreateSwapChainForHwnd(factory, (IUnknown*)device, window, &desc, NULL, NULL, &swapchain);
     assert_hr(hr);
 

@@ -340,6 +340,35 @@ struct undo_buffer_entry
     u32                 num_carets;
 };
 
+typedef enum highlight_token_kind
+{
+    highlight_token_none,
+    highlight_token_type,
+    highlight_token_function,
+    highlight_token_macro,
+    highlight_token_comment,
+    highlight_token_constant,
+    highlight_token_literal,
+    highlight_token_keyword,
+    highlight_token_pp_directive
+
+} highlight_token_kind;
+
+typedef struct
+{
+    highlight_token_kind    kind;
+    u32                     offset;
+    u32                     length;
+
+} highlight_token;
+
+typedef struct
+{
+    highlight_token *tokens;
+    u32             num_tokens;
+
+} highlight_token_array;
+
 typedef struct rained_buffer rained_buffer;
 struct rained_buffer
 {
@@ -360,6 +389,9 @@ struct rained_buffer
     text_edit           *patch_edits;
     text_edit           *schedule_edits;
     undo_buffer_entry   *undo_buffer_position;
+
+    arena               *tokens_arena;
+    highlight_token_array tokens;
     
     b32                 is_dirty;
     rained_buffer       *next;
@@ -446,7 +478,7 @@ internal arena *arena_alloc(u64 reserve, u64 commit)
 
     u64 reserve_size = (reserve + PAGE_SIZE) / PAGE_SIZE * PAGE_SIZE;
     u64 commit_size = (commit + PAGE_SIZE) / PAGE_SIZE * PAGE_SIZE;
-
+    
     void *base;
 
     os_mem_reserve(reserve_size, &base);
@@ -521,6 +553,12 @@ internal void arena_commit_to_fit_used(arena *arena)
     }
 }
 
+internal void arena_pop_to(arena_t *arena, u64 usage)
+{
+    // todo unpoison
+    arena->used = usage;
+}
+
 #define arena_push_zero(a,s,al) (memset(arena_push(a, s, al), 0, s)) 
 #define arena_push_struct(a, s) (arena_push(a, sizeof(s), 8))
 #define arena_push_struct_noalign(a, s) (arena_push_noalign(a, sizeof(s)))
@@ -528,7 +566,7 @@ internal void arena_commit_to_fit_used(arena *arena)
 #define arena_copy(a, p, s) (memcpy(arena_push(a, s, 8), p, s))
 #define arena_head(a) ((void*)((u8*)a->base + a->used))
 
-#define string_literal(cstr) ((string) { .p = (char*)&cstr, .length = lengthof(cstr) - 1} )
+#define string_lit(cstr) ((string) { .p = (char*)&cstr, .length = lengthof(cstr) - 1} )
 
 internal u32 cstring_length(char *cstr)
 {

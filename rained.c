@@ -52,11 +52,10 @@ internal void merge_overlapping_carets_in_a_slow_way(rained_view *view)
 
 internal void caret_move_right(rained_view *view, caret *caret)
 {
-    u32 p = caret->position;
     while(caret->position != view->buffer->text_size)
     {
         char c = view->buffer->text[caret->position];
-        caret->position++;
+        caret->position++; 
         if(c == '\n')
         {
             break;
@@ -551,6 +550,7 @@ internal rained_buffer *open_empty_buffer(rained_state *state)
         .text = arena_head(text_arena),
         .text_arena = text_arena,
         .arena1 = arena_alloc(gb(1), mb(1)),
+        .tokens_arena = arena_alloc(gb(1), mb(1)),
     };
     sll_push(state->buffers, buffer);
     return buffer;
@@ -569,6 +569,7 @@ internal rained_buffer *open_buffer_from_file(rained_state *state, string path)
         .text_arena = text_arena,
         .text_size = file_size,
         .arena1 = arena_alloc(gb(1), mb(1)),
+        .tokens_arena = arena_alloc(gb(1), mb(1)),
     };
     sll_push(state->buffers, buffer);
     return buffer;
@@ -910,7 +911,10 @@ internal lister_item *lister_get_items_for_rendering(rained_view *view)
 #define d_color_token_macro         0x00fabd2f
 #define d_color_token_type          0x00fabd2f
 #define d_color_token_keyword       0x00fe8019
+#define d_color_token_constant      0x00d3869b
+#define d_color_token_literal       0x00b8bb26
 #define d_color_token_comment       0x00928374
+#define d_color_token_pp_directive  0x00fb4934
 
 internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount, b32 is_focused)
 {
@@ -1151,11 +1155,17 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
     if(view->kind == rained_view_code && view->buffer->path.p)
     {
         PROFILE_BEGIN("tokens");
-        highlight_token_array arr = rained_tokens_from_buffer(view->buffer, global_state.frame_arena);
 
-        for(u32 i = 0; i < arr.num_tokens; i++)
+        if(view->buffer->is_dirty || !view->buffer->tokens.tokens)
         {
-            highlight_token t = arr.tokens[i];
+            arena_reset(view->buffer->tokens_arena);
+            view->buffer->tokens = rained_tokens_from_buffer(view->buffer, view->buffer->tokens_arena);
+            view->buffer->is_dirty = 0;
+        }
+
+        for(u32 i = 0; i < view->buffer->tokens.num_tokens; i++)
+        {
+            highlight_token t = view->buffer->tokens.tokens[i];
             u32 color = 0;
 
             switch(t.kind)
@@ -1165,6 +1175,9 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
                 case highlight_token_type: color = d_color_token_type; break;
                 case highlight_token_keyword: color = d_color_token_keyword; break;
                 case highlight_token_comment: color = d_color_token_comment; break;
+                case highlight_token_constant: color = d_color_token_constant; break;
+                case highlight_token_literal: color = d_color_token_literal; break;
+                case highlight_token_pp_directive: color = d_color_token_pp_directive; break;
     
                 default:
                 {
@@ -1951,15 +1964,6 @@ internal renderer_command *draw(rained_input *input)
         }
 
         merge_overlapping_carets_in_a_slow_way(view);
-    }
-
-    b32 any_buffer_is_dirty = 0;
-    rained_buffer *buffer = global_state.buffers;
-    while(buffer)
-    {
-        any_buffer_is_dirty |= buffer->is_dirty;
-        buffer->is_dirty = 0;
-        buffer = buffer->next;
     }
     
     // todo: doesn't work the way i want it to when mouse leaves the client area. im not sure what to do about this right now

@@ -11,8 +11,8 @@
 #include <hidsdi.h>
 #include <hidpi.h>
 #include <directmanipulation.h>
-; // FUCK OFFFFFFFFFF CLANG
-#include"rained.c"
+
+#include "rained.c"
 
 HWND                        window;
 WINDOWPLACEMENT             windowedPlacement;
@@ -42,6 +42,7 @@ IDirectManipulationUpdateManager    *dm_update_manager;
 IDirectManipulationViewport         *dm_viewport;
 IDirectManipulationContent          *dm_content;
 f32                                 dm_prev_y;
+b32                                 dm_scrolling;
 
 internal void os_mem_reserve(u64 size, void **address)
 {
@@ -132,12 +133,12 @@ internal void *os_read_file(char *path, u32 *out_size, arena_t *arena)
 
 internal void os_write_file(char *path, void *stuff, u64 size_bytes)
 {
-    HANDLE file = CreateFileA(path, 
-        GENERIC_WRITE, 
+    HANDLE file = CreateFileA(path,
+        GENERIC_WRITE,
         FILE_SHARE_READ,
         0,
-        CREATE_ALWAYS, 
-        FILE_ATTRIBUTE_NORMAL, 
+        CREATE_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL,
         0);
     WriteFile(file, stuff, size_bytes, 0, 0);
     CloseHandle(file);
@@ -422,16 +423,20 @@ internal font_atlas os_make_font_atlas(u32 size, arena *scratch)
 
 internal void os_debug_output_string(char *str)
 {
+#ifdef DEBUG
     OutputDebugStringA(str);
+#endif
 }
 
 internal void os_debug_printf(char *format, ...)
 {
+#ifdef DEBUG
     va_list va;
     va_start(va, format);
     stbsp_vsprintf(sprintf_buf, format, va);
     os_debug_output_string(sprintf_buf);
     va_end(va);
+#endif
 }
 
 internal rained_thread_context *rained_alloc_thread_context()
@@ -486,7 +491,8 @@ LRESULT window_callback(HWND window,
     WPARAM wParam,
     LPARAM lParam)
 {
-    stbsp_sprintf(sprintf_buf, "msg 0x%04X\n", message);
+    os_debug_printf("msg 0x%04X\n", message);
+
     PROFILE_BEGIN(sprintf_buf);
     LRESULT result = 0;
 
@@ -621,6 +627,9 @@ internal void resize_swapchain()
 {
     if(rt_view)
     {
+        // TODO something terrible happens at the swapchain re-creation. im not totally sure, but it does seem like dxgi waitable object starts causing random spikes, which suggests im not cleaning up smth or i dunno.
+        return;
+
         ID3D11RenderTargetView_Release(rt_view);
         ID3D11UnorderedAccessView_Release(uav);
         rt_view = 0;
@@ -644,6 +653,26 @@ internal void busy_wait(u64 time_us)
     u64 a = os_time_us() + time_us;
     while(os_time_us() < a) { }
 }
+
+internal HRESULT STDMETHODCALLTYPE QueryInterface(IDirectManipulationViewportEventHandler *this, REFIID riid, void **ppv) {
+    *ppv = this; return S_OK;
+}
+internal ULONG STDMETHODCALLTYPE AddRef(IDirectManipulationViewportEventHandler *this) { return 1; }
+internal ULONG STDMETHODCALLTYPE Release(IDirectManipulationViewportEventHandler *this) { return 1; }
+internal HRESULT STDMETHODCALLTYPE OnViewportStatusChanged(
+    IDirectManipulationViewportEventHandler *this,
+    IDirectManipulationViewport *viewport,
+    DIRECTMANIPULATION_STATUS current,
+    DIRECTMANIPULATION_STATUS previous)
+{
+    dm_scrolling = (current != 100);
+    os_debug_printf("dm_status: %d, dm_scrolling: %d\n", current, dm_scrolling);
+    return S_OK;
+}
+internal HRESULT STDMETHODCALLTYPE OnContentUpdated(IDirectManipulationViewportEventHandler *this,
+    IDirectManipulationViewport *viewport, IDirectManipulationContent *content) { return S_OK; }
+    internal HRESULT STDMETHODCALLTYPE OnViewportUpdated(IDirectManipulationViewportEventHandler *this,
+    IDirectManipulationViewport *viewport) { return S_OK; }
 
 #include <shellapi.h>   // CommandLineToArgv
 
@@ -707,7 +736,7 @@ void __stdcall WinMainCRTStartup()
         DIRECTMANIPULATION_CONFIGURATION_INTERACTION |
         DIRECTMANIPULATION_CONFIGURATION_TRANSLATION_Y |
         DIRECTMANIPULATION_CONFIGURATION_TRANSLATION_INERTIA);
-    IDirectManipulationViewport_SetViewportOptions(dm_viewport, DIRECTMANIPULATION_VIEWPORT_OPTIONS_MANUALUPDATE | DIRECTMANIPULATION_VIEWPORT_OPTIONS_DISABLEPIXELSNAPPING);
+    IDirectManipulationViewport_SetViewportOptions(dm_viewport, DIRECTMANIPULATION_VIEWPORT_OPTIONS_DISABLEPIXELSNAPPING);
     RECT viewport_rect = { 0, 0, -1, -1 };
     IDirectManipulationViewport_SetViewportRect(dm_viewport, &viewport_rect);
 
@@ -718,6 +747,19 @@ void __stdcall WinMainCRTStartup()
     IDirectManipulationManager_Activate(dm_manager, window);
     IDirectManipulationViewport_Enable(dm_viewport);
     IDirectManipulationUpdateManager_Update(dm_update_manager, 0);
+
+    IDirectManipulationViewportEventHandlerVtbl vtbl = {
+        QueryInterface, 
+        AddRef, 
+        Release,
+        OnViewportStatusChanged,
+        OnViewportUpdated,
+        OnContentUpdated
+    };
+    IDirectManipulationViewportEventHandlerVtbl *handler = &vtbl;
+
+    DWORD cookie = 0;
+    IDirectManipulationViewport_AddEventHandler(dm_viewport, window, (IDirectManipulationViewportEventHandler*)&handler, &cookie);
 
     os_toggle_fullscreen();
     
@@ -912,14 +954,34 @@ void __stdcall WinMainCRTStartup()
 
     PROFILE_END();
 
-
     u64 prev_frame;
     
     MSG message;
     while(!quit)
     {
-        PROFILE_BEGIN("loop");
 
+        #define RAINED_EEP
+
+    #ifdef RAINED_EEP
+        if(!dm_scrolling)
+        {
+            PROFILE_BEGIN("wait message");
+            os_debug_printf("wait message start\n");
+
+            DWORD r = MsgWaitForMultipleObjectsEx(
+                0,
+                0,
+                INFINITE,
+                QS_ALLINPUT,
+                MWMO_INPUTAVAILABLE
+            );
+        
+            os_debug_printf("wait message end\n");
+            PROFILE_END();
+        }
+    #endif
+
+        PROFILE_BEGIN("loop");
     #ifdef WAITABLE_OBJECT
         PROFILE_BEGIN("waitable object");
         WaitForSingleObjectEx(waitable_object, INFINITE, TRUE);
@@ -979,7 +1041,9 @@ void __stdcall WinMainCRTStartup()
         in.touchpad_panning = dy != 0.0f;
         in.touchpad_pan_delta = dy;
 
+        PROFILE_BEGIN("draw");
         renderer_command *cmd = draw(&in);
+        PROFILE_END();
         PROFILE_BEGIN("render");
 
         // todo removeme

@@ -1,7 +1,7 @@
 #ifndef RAINED_H
 #define RAINED_H
 
-#define SPALL_ENABLED
+//#define SPALL_ENABLED
 
 #define STB_SPRINTF_IMPLEMENTATION
 #include "stb_sprintf.h"

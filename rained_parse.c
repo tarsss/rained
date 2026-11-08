@@ -161,7 +161,7 @@ internal void rained_lex_next(rained_lexer *lexer)
         }
         else if(is_pp_directive)
         {
-            if(!char_is_alpha(c))
+            if(!char_is_alpha(c) && char_is_alpha(c_1))
             {
                 lexer->token = lex_token_pp_directive;
                 lexer->could_not_be_pp = 1;

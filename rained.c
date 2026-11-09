@@ -1640,7 +1640,6 @@ internal renderer_command *draw(rained_input *input)
                 if(!view->carets[i].selection_active)
                 {
                     view->carets[i].selection_pos = view->carets[i].position;
-                    view->carets[i].selection_active = 1;
                 }
             }
         }
@@ -1800,7 +1799,7 @@ internal renderer_command *draw(rained_input *input)
                         tile_pop_view(global_state.focused_tile);
                     }
                 }
-                else if(e.code == KEY_BACKSPACE || e.code == (KEY_BACKSPACE | MODIFIER_CTRL))
+                else if(e.code == KEY_BACKSPACE || e.code == (KEY_BACKSPACE | MODIFIER_CTRL) || e.code == (KEY_BACKSPACE | MODIFIER_SHIFT) || e.code == (KEY_BACKSPACE | MODIFIER_SHIFT | MODIFIER_CTRL))
                 {
                     carets_delete(view, 0, e.code & MODIFIER_CTRL);
                 }

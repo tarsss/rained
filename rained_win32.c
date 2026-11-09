@@ -33,7 +33,6 @@ b8                          quit;
 i16                         mouse_wheel_delta_accum;
 i32                         mouse_x, mouse_y;
 b32                         lmb, rmb, mmb;
-char                        sprintf_buf[1024]; // for sprintf, dumb
 u64                         frame_start;
 u32                         cell_buffer_count;
 DWORD                       thread_context_tls_index;
@@ -433,7 +432,8 @@ internal void os_debug_printf(char *format, ...)
 #ifdef DEBUG
     va_list va;
     va_start(va, format);
-    stbsp_vsprintf(sprintf_buf, format, va);
+    char sprintf_buf[1024];
+    stbsp_vsnprintf(sprintf_buf, 1024, format, va);
     os_debug_output_string(sprintf_buf);
     va_end(va);
 #endif
@@ -493,7 +493,7 @@ LRESULT window_callback(HWND window,
 {
     os_debug_printf("msg 0x%04X\n", message);
 
-    PROFILE_BEGIN(sprintf_buf);
+    PROFILE_BEGIN("msg");
     LRESULT result = 0;
 
     switch (message)
@@ -558,6 +558,14 @@ LRESULT window_callback(HWND window,
         {
             mouse_x = LOWORD(lParam);
             mouse_y = HIWORD(lParam);
+            break;
+        }
+        case WM_GETMINMAXINFO:
+        {
+            // just dont let the window to be collapsed
+            LPMINMAXINFO lpMMI = (LPMINMAXINFO)lParam;
+            lpMMI->ptMinTrackSize.x = 256;
+            lpMMI->ptMinTrackSize.y = 256;
             break;
         }
         case WM_LBUTTONDOWN:
@@ -824,13 +832,6 @@ void __stdcall WinMainCRTStartup()
     hr = IDXGIAdapter_GetParent(dxgiAdapter, &IID_IDXGIFactory2, (void**)&factory);
     assert_hr(hr);
 
-    IDXGIDevice1 *dxgiDevice1;
-    hr = ID3D11Device_QueryInterface(device, &IID_IDXGIDevice1, (void**)&dxgiDevice1);
-    assert_hr(hr);
-
-    //hr = IDXGIDevice1_SetMaximumFrameLatency(dxgiDevice1, 1);
-    //assert_hr(hr);
-
     #define FLIP_MODEL
     #define WAITABLE_OBJECT
     
@@ -844,37 +845,21 @@ void __stdcall WinMainCRTStartup()
 
     DXGI_SWAP_CHAIN_DESC1 desc =
     {
-        // default 0 value for width & height means to get it from HWND automatically
-        //.Width = 0,
-        //.Height = 0,
-        // or use DXGI_FORMAT_R8G8B8A8_UNORM_SRGB for storing sRGB
         .Format = DXGI_FORMAT_R8G8B8A8_UNORM,
-        // FLIP presentation model does not allow MSAA framebuffer
-        // if you want MSAA then you'll need to render offscreen and manually
-        // resolve to non-MSAA framebuffer
         .SampleDesc = { 1, 0 },
         .BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT | DXGI_USAGE_UNORDERED_ACCESS,
         .BufferCount = 2,
-        // we don't want any automatic scaling of window content
-        // this is supported only on FLIP presentation model
         #ifdef FLIP_MODEL
         .Scaling = DXGI_SCALING_NONE,
         .SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD,
         #else
         .SwapEffect = DXGI_SWAP_EFFECT_DISCARD,
         #endif
-        
-        // use more efficient FLIP presentation model
-        // Windows 10 allows to use DXGI_SWAP_EFFECT_FLIP_DISCARD
-        // for Windows 8 compatibility use DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL
-        // for Windows 7 compatibility use DXGI_SWAP_EFFECT_DISCARD
-
         .Flags = swapchain_flags
     };
 
     hr = IDXGIFactory2_CreateSwapChainForHwnd(factory, (IUnknown*)device, window, &desc, NULL, NULL, &swapchain);
     assert_hr(hr);
-
     
 #ifdef WAITABLE_OBJECT
     IDXGISwapChain2 *swapchain2;
@@ -886,7 +871,8 @@ void __stdcall WinMainCRTStartup()
     HANDLE waitable_object = IDXGISwapChain2_GetFrameLatencyWaitableObject(swapchain2);
 #else
     IDXGIDevice1 *device1;
-    IDXGIDevice_QueryInterface(device, &IID_IDXGIDevice1, &device1);
+    hr = IDXGIDevice_QueryInterface(device, &IID_IDXGIDevice1, &device1);
+    assert_hr(hr);
     IDXGIDevice1_SetMaximumFrameLatency(device1, 1);
 #endif
 
@@ -1045,10 +1031,6 @@ void __stdcall WinMainCRTStartup()
         renderer_command *cmd = draw(&in);
         PROFILE_END();
         PROFILE_BEGIN("render");
-
-        // todo removeme
-        f32 clear_color[4] = { 1,0,1,1 }; 
-        ID3D11DeviceContext_ClearRenderTargetView(device_context, rt_view, clear_color);
 
         while(cmd)
         {

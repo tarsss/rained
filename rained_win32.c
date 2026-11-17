@@ -33,6 +33,8 @@ b8                          quit;
 i16                         mouse_wheel_delta_accum;
 i32                         mouse_x, mouse_y;
 b32                         lmb, rmb, mmb;
+b32                         window_lost_focus;
+b32                         trying_to_close;
 u64                         frame_start;
 u32                         cell_buffer_count;
 DWORD                       thread_context_tls_index;
@@ -301,7 +303,7 @@ internal void dwrite_init()
     IDWriteFactory_GetSystemFontCollection(dwrite_state.factory, &dwrite_state.font_collection, FALSE);
     u32 font_family_index;
     b32 sneed;
-    IDWriteFontCollection_FindFamilyName(dwrite_state.font_collection, L"consolas", &font_family_index, &sneed);
+    IDWriteFontCollection_FindFamilyName(dwrite_state.font_collection, L"monocraft", &font_family_index, &sneed);
     hr = IDWriteFontCollection_GetFontFamily(dwrite_state.font_collection, font_family_index, &dwrite_state.font_family);
     hr = IDWriteFontFamily_GetFirstMatchingFont(dwrite_state.font_family, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, &dwrite_state.font);
     hr = IDWriteFont_CreateFontFace(dwrite_state.font, &dwrite_state.font_face);    
@@ -483,6 +485,12 @@ internal void os_create_thread(void (* routine)(void *), void *data, c16 *name)
     ResumeThread(handle);
 }
 
+internal void os_quit()
+{
+    DestroyWindow(window);
+    quit = 1;
+}
+
 static input_event input_queue[128];
 static u32         input_queue_count;
 
@@ -613,12 +621,17 @@ LRESULT window_callback(HWND window,
         }
         case WM_CLOSE:
         {
-            DestroyWindow(window);
+            trying_to_close = 1;
             break;
         }
         case WM_DESTROY:
         {
             PostQuitMessage(0);
+            break;
+        }
+        case WM_KILLFOCUS:
+        {
+            window_lost_focus = 1;
             break;
         }
         default:
@@ -946,7 +959,7 @@ void __stdcall WinMainCRTStartup()
     while(!quit)
     {
 
-        #define RAINED_EEP
+    #define RAINED_EEP
 
     #ifdef RAINED_EEP
         if(!dm_scrolling)
@@ -976,6 +989,8 @@ void __stdcall WinMainCRTStartup()
         
         mouse_wheel_delta_accum = 0;
         input_queue_count = 0;
+        window_lost_focus = 0;
+        trying_to_close = 0;
 
         PROFILE_BEGIN("poll");
         while (PeekMessage(&message, 0, 0, 0, PM_REMOVE))
@@ -1014,7 +1029,9 @@ void __stdcall WinMainCRTStartup()
             .screen_h = screen_h,
             .screen_w = screen_w,
             .delta_time = min((f32)prev_frame / 1000000.0f, 1/30.0f),
-            .mouse_wheel_delta = (f32) mouse_wheel_delta_accum / 120.0f * 32.0f
+            .mouse_wheel_delta = (f32) mouse_wheel_delta_accum / 120.0f * 32.0f,
+            .window_lost_focus = window_lost_focus,
+            .trying_to_close = trying_to_close
         };
 
         f32 m[6];

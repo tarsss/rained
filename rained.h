@@ -257,6 +257,8 @@ typedef struct
     f32                 touchpad_pan_delta;
     b32                 touchpad_set_inertia;
     f32                 touchpad_inertia;
+    b32                 window_lost_focus;
+    b32                 trying_to_close;
 
 } rained_input;
 
@@ -455,7 +457,7 @@ internal void os_release_font_atlas(font_atlas atlas);
 internal void os_debug_output_string(char *str);
 internal void os_debug_printf(char *format, ...);
 internal void os_create_thread(void (* routine)(void *), void *data, c16 *name);
-
+internal void os_quit();
 
 typedef struct
 {

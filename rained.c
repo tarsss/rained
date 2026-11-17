@@ -575,6 +575,27 @@ internal rained_buffer *open_buffer_from_file(rained_state *state, string path)
     return buffer;
 }
 
+internal void save_buffer(rained_buffer *b)
+{
+    if(b->path.p)
+    {
+        // todo have like an unsaved flag or whatever. also readonly. also scratch
+        os_write_file(b->path.p, b->text, b->text_size);
+    }
+}
+
+internal void save_all_buffers(rained_state *s)
+{
+    PROFILE_BEGIN("save_all_buffers");
+    rained_buffer *b = s->buffers;
+    while(b)
+    {
+        save_buffer(b);
+        b = b->next;
+    }
+    PROFILE_END();
+}
+
 internal rained_view *tile_push_view(rained_tile *tile, rained_buffer *buffer)
 {
     rained_view *view = arena_push_struct_zero(global_state.forever_arena, rained_view);
@@ -1114,42 +1135,6 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
                 .bg_color = d_color_bg,
             };
         }
-
-        for(u32 k = 0; k < view->num_carets; k++)
-        {
-            caret *caret = &view->carets[k];
-            
-            if(view->line_index + l->line_index == caret_lines[k])
-            {
-                for(u32 j = 0; j < view->width_cells; j++)
-                {
-                    cells[y * view->width_cells + j].bg_color = d_color_caret_line;
-                }
-            }
-            if(caret->selection_active)
-            {
-                u32 start = max(l->pos_in_text, min(caret->position, caret->selection_pos));
-                u32 end = min((l->pos_in_text + l->length), max(caret->position, caret->selection_pos));
-                for(u32 j = start; j < end; j++)
-                {
-                    cells[y * view->width_cells + j - l->pos_in_text].bg_color = d_color_selection;
-                }
-            }
-        }
-        
-        if(is_focused)
-        {
-            for(u32 k = 0; k < view->num_carets; k++)
-            {
-                caret *caret = &view->carets[k];
-                if(caret->position >= l->pos_in_text && caret->position < l->pos_in_text + l->length)
-                {      
-                    cell *c = &cells[caret->position - l->pos_in_text + y * view->width_cells];
-                    c->bg_color = ~c->bg_color;
-                    c->text_color = ~c->text_color;
-                }
-            }
-        }
     }
     
     if(view->kind == rained_view_code && view->buffer->path.p)
@@ -1244,6 +1229,48 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
             }
         }
         PROFILE_END();
+    }
+
+    for(u32 k = 0; k < view->num_carets; k++)
+    {
+        caret *caret = &view->carets[k];
+        b8 found_cell_pos = 0;
+        u32 cell_pos = 0;
+        for(i32 y = 0; y < count; y++)
+        {
+            chopped_line *l = &chopped.lines[offset_lines + y];
+
+            if(view->line_index + l->line_index == caret_lines[k])
+            {
+                for(u32 j = 0; j < view->width_cells; j++)
+                {
+                    cells[y * view->width_cells + j].bg_color = d_color_caret_line;
+                }
+            }
+            
+            if(caret->selection_active) 
+            {
+                u32 start = max(l->pos_in_text, min(caret->position, caret->selection_pos));
+                u32 end = min((l->pos_in_text + l->length), max(caret->position, caret->selection_pos));
+                for(u32 j = start; j < end; j++)
+                {
+                    cells[y * view->width_cells + j - l->pos_in_text].bg_color = d_color_selection;
+                }
+            }
+
+            if(caret->position >= l->pos_in_text && caret->position <= l->pos_in_text + l->length)
+            {      
+                found_cell_pos = 1;
+                cell_pos = caret->position - l->pos_in_text + y * view->width_cells;
+            }
+        }
+
+        if(found_cell_pos && is_focused)
+        {
+            cell *c = &cells[cell_pos];
+            c->text_color = c->bg_color;
+            c->bg_color = ~c->bg_color;
+        }
     }
 
     push_renderer_command(ctx, (renderer_command)
@@ -1627,6 +1654,17 @@ internal renderer_command *draw(rained_input *input)
     }
     PROFILE_END();
 
+    if(input->window_lost_focus)
+    {
+        save_all_buffers(&global_state);
+    }
+
+    if(input->trying_to_close)
+    {
+        save_all_buffers(&global_state);
+        os_quit();
+    }
+
     rained_view *view = global_state.focused_tile->view;
 
     for(u32 i = 0; i < input->input_queue_count; i++)
@@ -1679,7 +1717,7 @@ internal renderer_command *draw(rained_input *input)
                 }
                 else if(e.code == ('S' | MODIFIER_CTRL))
                 {
-                    os_write_file(view->buffer->path.p, view->buffer->text, view->buffer->text_size);
+                    save_buffer(view->buffer);
                 }
                 else if(e.code == ('N' | MODIFIER_CTRL))
                 {

@@ -1,4 +1,5 @@
 #include "rained.h"
+#include "rained_parse.h"
 #include "rained_parse.c"
 
 typedef struct
@@ -19,6 +20,12 @@ typedef struct
 rained_state global_state;
 
 internal u32 caret_get_column(rained_view *view, caret *caret)
+{
+    u32 start = find_line_start(view->buffer, caret->position);
+    return caret->position - start;
+}
+
+internal u32 caret_get_column_chopped(rained_view *view, caret *caret)
 {
     u32 start = find_line_start(view->buffer, caret->position);
     chopped_line_list list = chop_lines(view->buffer, view->width_cells, start, -1, 1, global_state.frame_arena);
@@ -65,7 +72,7 @@ internal void caret_move_right(rained_view *view, caret *caret)
             break;
         }
     }
-    caret->wish_column = caret_get_column(view, caret);
+    caret->wish_column = caret_get_column_chopped(view, caret);
 }
 
 internal void caret_move_left(rained_view *view, caret *caret)
@@ -83,7 +90,7 @@ internal void caret_move_left(rained_view *view, caret *caret)
             break;
         }
     }
-    caret->wish_column = caret_get_column(view, caret);
+    caret->wish_column = caret_get_column_chopped(view, caret);
 }
 
 typedef enum
@@ -215,13 +222,13 @@ internal u32 caret_prev_token(rained_view *view, caret *caret)
 internal void caret_jump_right(rained_view *view, caret *caret)
 {    
     caret->position = caret_next_token(view, caret);
-    caret->wish_column = caret_get_column(view, caret);
+    caret->wish_column = caret_get_column_chopped(view, caret);
 }
 
 internal void caret_jump_left(rained_view *view, caret *caret)
 {
     caret->position = caret_prev_token(view, caret);
-    caret->wish_column = caret_get_column(view, caret);
+    caret->wish_column = caret_get_column_chopped(view, caret);
 }
 
 internal void caret_move_to_prev_line(rained_buffer *buffer, caret *caret)
@@ -314,6 +321,7 @@ internal void carets_bubble_sort_top_to_bottom(rained_view *view)
 
 internal void buffer_apply_edit(rained_buffer *buffer, text_edit *edit)
 {
+    buffer->is_dirty = 1;
     if(edit->additive)
     {
         buffer->text_arena->used += edit->string.length;
@@ -341,6 +349,7 @@ internal void buffer_apply_edit(rained_buffer *buffer, text_edit *edit)
 
 internal void buffer_push_edit(rained_buffer *buffer, text_edit *entry)
 {
+    buffer->is_dirty = 1;
     dll_push(buffer->latest_edit, entry);
     if(!buffer->patch_edits)
     {
@@ -406,11 +415,10 @@ internal void carets_insert_string(rained_view *view, string insert)
             text_edit *e = buffer_push_insert_edit(view->buffer, caret->position, insert);
             buffer_apply_edit(view->buffer, e);
             caret->position += insert.length;
-            caret->wish_column = caret_get_column(view, caret);
+            caret->wish_column = caret_get_column_chopped(view, caret);
         }
     }
     view->fit_caret = 1;
-    view->buffer->is_dirty = 1;
     push_undo_entry(view);
 }
 
@@ -438,10 +446,9 @@ internal void carets_delete_length(rained_view *view, u32 *lengths)
         caret->position -= num_to_remove;
         text_edit *e = buffer_push_delete_edit(view->buffer, caret->position, num_to_remove);
         buffer_apply_edit(view->buffer, e);
-        caret->wish_column = caret_get_column(view, caret);
+        caret->wish_column = caret_get_column_chopped(view, caret);
     }
     view->fit_caret = 1;
-    view->buffer->is_dirty = 1;
     push_undo_entry(view);
 }
 
@@ -958,11 +965,16 @@ internal void draw_view(draw_context *ctx, rained_view *view, f32 scroll_amount,
             };
         }
 
-        for(u32 j = 0; j < view->buffer->path.length; j++)
+        // note: expecting a null terminated path string obv. also no cache etc etc
+        u32 line = find_line_index(view->buffer, view->carets[0].position);
+        u32 column = caret_get_column(view, &view->carets[0]);
+        string title = string_push_format(global_state.frame_arena, "%s (%d,%d)", view->buffer->path.p, line, column);
+
+        for(u32 j = 0; j < title.length; j++)
         {
             cells[j] = (cell) 
             { 
-                .atlas_index = view->buffer->path.p[j] - 32,
+                .atlas_index = title.p[j] - 32,
                 .text_color = d_color_text,
                 .bg_color = 0x00545e52 / 2,
             };
@@ -1569,14 +1581,13 @@ internal u32 get_auto_indentation(rained_buffer *buffer, u32 position)
     return nesting_depth * 4;
 }
 
-// todo: patch carets...?
-internal void indent_range(rained_view *view, u32 position, u32 length)
+internal void carets_indent(rained_view *view)
 {
-    u32 p = find_line_start(view->buffer, position);
-    while(1)
+    for(u32 i = 0; i < view->num_carets; i++)
     {
+        caret *c = &view->carets[i];
         u32 num_spaces = 0;
-        u32 i = p;
+        u32 i = find_line_start(view->buffer, c->position);
         while(view->buffer->text[i] == ' ')
         {
             i++;
@@ -1585,10 +1596,11 @@ internal void indent_range(rained_view *view, u32 position, u32 length)
 
         if(num_spaces)
         {
-            buffer_apply_edit(view->buffer, buffer_push_delete_edit(view->buffer, p, num_spaces));
+            //c->position -= num_spaces;
+            //buffer_apply_edit(view->buffer, buffer_push_delete_edit(view->buffer, c->position, num_spaces));
         }
         
-        u32 indentation = get_auto_indentation(view->buffer, p);
+        u32 indentation = get_auto_indentation(view->buffer, c->position);
         if(indentation)
         {
             string insert = 
@@ -1600,29 +1612,9 @@ internal void indent_range(rained_view *view, u32 position, u32 length)
             {
                 insert.p[i] = ' ';
             }
-            buffer_apply_edit(view->buffer, buffer_push_insert_edit(view->buffer, p, insert));
+            buffer_apply_edit(view->buffer, buffer_push_insert_edit(view->buffer, c->position, insert));
+            c->position += indentation;
         }
-
-        if(!find_line_next(view->buffer, &p) || p > position + length)
-        {
-            break;
-        }
-    }
-}
-
-internal void carets_indent(rained_view *view)
-{
-    for(u32 i = 0; i < view->num_carets; i++)
-    {
-        caret c = view->carets[i];
-        u32 range_start = c.position;
-        u32 range_length = 0;
-        if(c.selection_active)
-        {
-            range_start = min(c.position, c.selection_pos);
-            range_length = max(c.position, c.selection_pos) - range_start;
-        }
-        indent_range(view, range_start, range_length);
     }
 }
 
@@ -1638,11 +1630,11 @@ internal renderer_command *draw(rained_input *input)
         global_state.tile_right = arena_push_struct_zero(global_state.forever_arena, rained_tile);
         global_state.tile_left->next = global_state.tile_right;
         global_state.focused_tile = global_state.tile_left;
-        rained_buffer *b0 = open_buffer_from_file(&global_state, arena_push_cstring(global_state.frame_arena, ".\\rained.c"));
-        rained_buffer *b1 = open_buffer_from_file(&global_state, arena_push_cstring(global_state.frame_arena, ".\\rained_win32.c"));
+        rained_buffer *b0 = open_buffer_from_file(&global_state, arena_push_cstring(global_state.frame_arena, "rained.c"));
+        rained_buffer *b1 = open_buffer_from_file(&global_state, arena_push_cstring(global_state.frame_arena, "rained_win32.c"));
         rained_view *v0 = tile_push_view(global_state.tile_left, b0);
         rained_view *v1 = tile_push_view(global_state.tile_right, b1);
-        global_state.font_size = 18;
+        global_state.font_size = 15;
     }
     arena_reset(global_state.frame_arena);
 
@@ -1718,6 +1710,11 @@ internal renderer_command *draw(rained_input *input)
                 else if(e.code == ('S' | MODIFIER_CTRL))
                 {
                     save_buffer(view->buffer);
+                }
+                else if(e.code == ('Q' | MODIFIER_CTRL))
+                {
+                    save_all_buffers(&global_state);
+                    os_quit();
                 }
                 else if(e.code == ('N' | MODIFIER_CTRL))
                 {
@@ -1951,14 +1948,14 @@ internal renderer_command *draw(rained_input *input)
                     else if(e.code == (KEY_LEFT | MODIFIER_CTRL | MODIFIER_ALT) || e.code == (KEY_LEFT | MODIFIER_CTRL | MODIFIER_ALT | MODIFIER_SHIFT))
                     {
                         caret->position = find_line_start(view->buffer, caret->position);
-                        caret->wish_column = caret_get_column(view, caret);
+                        caret->wish_column = caret_get_column_chopped(view, caret);
                         caret->selection_active = (e.code & MODIFIER_SHIFT);
                         view->fit_caret = 1;
                     }
                     else if(e.code == (KEY_RIGHT | MODIFIER_CTRL | MODIFIER_ALT) || e.code == (KEY_RIGHT | MODIFIER_CTRL | MODIFIER_ALT | MODIFIER_SHIFT))
                     {
                         caret->position = find_line_end(view->buffer, caret->position);
-                        caret->wish_column = caret_get_column(view, caret);
+                        caret->wish_column = caret_get_column_chopped(view, caret);
                         caret->selection_active = (e.code & MODIFIER_SHIFT);
                         view->fit_caret = 1;
                     }
@@ -2011,7 +2008,7 @@ internal renderer_command *draw(rained_input *input)
             global_state.mouse_drag_tile->view->num_carets = 1;
             caret *caret = &global_state.mouse_drag_tile->view->carets[0];
             caret->position = tile_screen_pos_to_view_buffer_text_pos(global_state.mouse_drag_tile, input->mouse_x, input->mouse_y);
-            caret->wish_column = caret_get_column(global_state.mouse_drag_tile->view, caret);
+            caret->wish_column = caret_get_column_chopped(global_state.mouse_drag_tile->view, caret);
         }
         else 
         {
